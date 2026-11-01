@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "latentdragon"
+version = "0.1.0"
+description = "Image and video latent autoencoder framework: VQ, GAN schemes, staged heads and a selection-based trainer."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Kohaku-Blueleaf" }]
+dependencies = [
+    "torch>=2.13",
+    "numpy",
+    "pillow>=9.4",
+    "safetensors",
+    "torchvision",
+    "torchmetrics[image]",
+    "kohaku-engine",
+    "anyschedule",
+    "optimfactory",
+    "sensecraft[full]",
+]
+
+[project.optional-dependencies]
+kernels = ["triton>=3.7"]
+video = ["av"]
+wandb = ["wandb"]
+export = ["diffusers"]
+dev = ["ruff", "black"]
+
+[project.urls]
+Homepage = "https://github.com/KohakuBlueleaf/LatentDragon"
+Issues = "https://github.com/KohakuBlueleaf/LatentDragon/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["latentdragon*"]
+
+[tool.black]
+line-length = 88
+target-version = ["py313"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["latentdragon", "latentdragon_common", "latentdragon_data", "latentdragon_kernels"]

@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.ruff_cache/
+/build/
+/dist/
+/plans/
+/runs/
+/wandb/
+*.ckpt
+*.safetensors
+*.pt
+CLAUDE.local.md
+STATE.md
+docs/internals/

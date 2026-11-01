@@ -1,0 +1,34 @@
+name: Bug report
+description: Something crashed or gave a wrong result
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you ran, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Exact command and recipe
+      description: The `kogine run` line and any `--set` overrides.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Full log
+      description: The whole log, plus the run's `config.json` and `git.json`.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: GPU, driver, OS, Python, torch and Triton versions.
+    validations:
+      required: true
