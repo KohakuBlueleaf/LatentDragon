@@ -13,5 +13,5 @@ models and stop at the first failure.
 
 A change that touches none of this needs none of them; adding a module does not affect resume.
 
-Numbers are not checked here. Precision, throughput and training
-results are reports from [`experiments/`](../experiments) and from real runs, read by a person.
+Numbers are not checked here. Decode strategies, precision, throughput and training results are
+reports from [`experiments/`](../experiments) and from real runs, read by a person.

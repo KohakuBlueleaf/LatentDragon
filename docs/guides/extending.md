@@ -2,8 +2,9 @@
 
 | Add | Do |
 | --- | --- |
-| Norm, block, encoder, trunk | register in `NORM`, `BLOCK`, `ENCODER`, `TRUNK` |
-| Head | register in `HEAD`, pair in `HEAD_OBJECTIVES`, expose `anchor` |
+| Norm, block, encoder, trunk | register in `NORM`, `BLOCK`, `ENCODER`, `TRUNK`; a block sets `spatial_reach` and `temporal_reach` for exact tiling |
+| Head | register in `HEAD`, pair in `HEAD_OBJECTIVES`, expose `anchor` and `reach` |
+| Decode strategy | subclass `DecodeStrategy`, list trunk methods in `requires`, register in `DECODE` |
 | Bottleneck | subclass `Bottleneck`, register in `BOTTLENECK` |
 | Quantizer codebook | register in `CODEBOOK`, return `(R, P, N, D)` |
 | Critic | subclass `Critic`, set `tracks_stats`, register in `CRITIC` |

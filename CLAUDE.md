@@ -11,7 +11,7 @@ KohakUwULLM and KohakuMoss; same house conventions.
 | `latentdragon_common` | registry, build, imports, log, knobs, null callables | no torch, no sibling |
 | `latentdragon_kernels` | ops, registry, eager and Triton backends, tuning, error stats | common |
 | `latentdragon_data` | sources, epoch-resumable loader | common |
-| `latentdragon` | model, bottleneck, vq, latent, gan, objectives, tasks, training, eval, io | all |
+| `latentdragon` | model, bottleneck, vq, latent, gan, objectives, tasks, training, eval, inference, io | all |
 
 `model`, `vq` and `bottleneck` never import `training`. `checks/repo_rules.py` verifies
 direction, file length, ASCII and in-function imports.

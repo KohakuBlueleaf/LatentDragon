@@ -1,10 +1,13 @@
 """`Autoencoder`: encoder, bottleneck, trunk and head, with no loss knowledge."""
 
+from dataclasses import replace
+
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from latentdragon.domain import Domain
+from latentdragon.model.reach import Reach, is_local
 from latentdragon.types import BottleneckOut
 
 
@@ -33,6 +36,11 @@ class Autoencoder(nn.Module):
     def decode(self, z: Tensor) -> Tensor:
         """Trunk features for a bottleneck latent."""
         return self.trunk(z)
+
+    def reach(self, start: int = 0) -> Reach:
+        """Reach of the trunk stages from `start` plus the head, on that stage's grid."""
+        reach = self.trunk.reach(start, self.head.reach)
+        return reach if is_local([self.head]) else replace(reach, spatial=None)
 
     def bind_kernels(self, device: torch.device) -> None:
         """Forward kernel selection to the bottleneck."""

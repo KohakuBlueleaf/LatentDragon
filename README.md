@@ -258,6 +258,31 @@ kogine run scripts/tools/convert_legacy.py --set SOURCE=old.ckpt --set TARGET=co
 `spec.json`), `diffusers` (a folder for `AutoModel.from_pretrained(trust_remote_code=True)`),
 `legacy_safetensors` or `legacy_ckpt`. A `.ckpt` carries pickled code; load files you trust.
 
+## Decode large latents
+
+`decode` runs a latent through a strategy selected by name. Tile sizes are output pixels.
+
+```python
+from latentdragon.inference import decode
+
+out = decode(model, z, {"name": "tiled", "tile": [512, 512]})
+out = decode(model, z, {"name": "staged_tiled", "stages": 2, "tile": [512, 512]})
+out = decode(model, z, "streaming")
+out = decode(model, z, {"name": "streaming_tiled", "tile": [1024, 1024]})
+```
+
+| Strategy | Use it for |
+| --- | --- |
+| `tiled` | large images and video; `tile_t` also tiles time, and `inner` chooses how each tile decodes |
+| `staged_tiled` | running the early trunk stages whole and tiling the late ones |
+| `streaming` | long video at constant memory, frame chunks as they finish |
+| `streaming_tiled` | long, large video, one causal cache per tile |
+
+Overlap comes from `model.reach()`, which is summed from what each block declares, so a tiled decode
+matches the full decode up to floating point. Attention and group norm read every position; on those
+models set `overlap` to accept an approximate result. Streaming needs the video trunk. See
+[inference](docs/concepts/inference.md).
+
 ## Extend
 
 Parts are registered by name, and a dotted path works wherever a name does.
@@ -268,6 +293,7 @@ Parts are registered by name, and a dotted path works wherever a name does.
 | head and its objective | `HEAD`, `HEAD_OBJECTIVES` |
 | bottleneck, codebook | `BOTTLENECK`, `CODEBOOK`, `QUANTIZER` |
 | critic, GAN scheme | `CRITIC`, `GAN_SCHEME` |
+| decode strategy | `DECODE` |
 | latent augmentation, loss, frozen teacher | `LATENT_VIEW`, `LATENT_TERM`, `TEACHER` |
 | a new kind of training | a `Task` |
 
@@ -279,10 +305,10 @@ src/latentdragon_kernels/   Triton and eager ops, per-card tuning
 src/latentdragon_data/      image and video sources, resumable loader
 src/latentdragon/
   model/  bottleneck/  vq/  domain/  gan/  latent/  objectives/
-  tasks/  training/  eval/  io/
+  tasks/  training/  eval/  inference/  io/
 configs/ae/                 data, precision, recipes
 scripts/                    train, export, tools
-experiments/                kernel precision, throughput
+experiments/                decode strategies, kernel precision, throughput
 docs/                       concepts, guides
 checks/                     behavior scripts, run by hand; see checks/README.md
 ```

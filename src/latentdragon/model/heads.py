@@ -38,6 +38,11 @@ class RegressionHead(nn.Module):
         """The final projection weight."""
         return self.proj.weight
 
+    @property
+    def reach(self) -> int:
+        """Output pixels read on each side."""
+        return self.proj.kernel_size[0] // 2
+
     def forward(self, features: Tensor, pixels: Tensor | None = None) -> Tensor:
         """Project trunk features to the output; `pixels` is unused."""
         return self.proj(self.act(self.norm(features)))

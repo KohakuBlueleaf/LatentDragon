@@ -19,7 +19,14 @@ def build_block(spec: Any, **site) -> nn.Module:
 
 
 class Block(nn.Module):
-    """Marks the modules `apply_recompute` and `apply_compile` act on."""
+    """Marks the modules `apply_recompute` and `apply_compile` act on.
+
+    `spatial_reach` is the pixels one block reads on each side at its resolution, None
+    when unknown. `temporal_reach` is the past frames it reads.
+    """
+
+    spatial_reach: int | None = None
+    temporal_reach: int = 0
 
 
 def _channel_mlp(in_dim: int, mlp_dim: int, out_dim: int) -> nn.Module:
@@ -32,6 +39,8 @@ def _channel_mlp(in_dim: int, mlp_dim: int, out_dim: int) -> nn.Module:
 @BLOCK.register("mlp")
 class BasicBlock(Block):
     """Norm, depthwise 3x3, channel MLP, residual."""
+
+    spatial_reach = 1
 
     def __init__(
         self, in_dim: int, mlp_dim: int, out_dim: int, norm_layer: Callable = RMSNorm
@@ -50,6 +59,8 @@ class BasicBlock(Block):
 @BLOCK.register("res")
 class BasicResBlock(Block):
     """SD-style block: two rounds of norm, activation, 3x3 conv, with a skip."""
+
+    spatial_reach = 2
 
     def __init__(
         self,
@@ -79,6 +90,9 @@ class BasicResBlock(Block):
 @BLOCK.register("mlp3d")
 class BasicBlock3D(Block):
     """`BasicBlock` on `(B, T, C, H, W)` with a causal temporal conv after the mixer."""
+
+    spatial_reach = 1
+    temporal_reach = 2
 
     def __init__(
         self, in_dim: int, mlp_dim: int, out_dim: int, norm_layer: Callable = RMSNorm

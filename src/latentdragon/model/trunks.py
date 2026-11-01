@@ -1,7 +1,10 @@
 """Trunks: decoder bodies up to, not including, the head."""
 
 from collections.abc import Callable, Sequence
+from fractions import Fraction
 from functools import partial
+from itertools import islice
+from math import ceil
 from typing import Any
 
 import torch.nn as nn
@@ -10,6 +13,7 @@ from optimfactory import mup_init
 from torch import Tensor
 
 from latentdragon.model.layers import resolve_norm
+from latentdragon.model.reach import Reach, declared, is_local
 from latentdragon.model.stages import (
     ConvStage,
     StageSpec,
@@ -84,15 +88,45 @@ class ShuffleTrunk(nn.Module):
         """Head arguments matching this trunk's output."""
         return {"kernel_size": 1}
 
-    def features(self, x: Tensor, step: Callable = call_block, **frames) -> Tensor:
-        """Walk the stages; `step` runs one block."""
-        for scale, stage, proj, fuser, attn in zip(
+    def reach(self, start: int = 0, tail: int = 0) -> Reach:
+        """Reach of stages from `start` plus `tail` output pixels, on that stage's grid."""
+        stages = list(self.stages[start:])
+        blocks = [block for stage in stages for block in stage]
+        attention = self.attn_blocks[start:]
+
+        # Blocks read frames after the stage's fuser and pixels before its shuffle
+        spatial, temporal = Fraction(0), Fraction(0)
+        spatial_step, temporal_step = 1, 1
+        for scale, t_scale, stage in zip(
+            self.scales[start:], self.t_scales[start:], stages
+        ):
+            temporal_step *= t_scale
+            for block in stage:
+                spatial += Fraction(block.spatial_reach or 0, spatial_step)
+                temporal += Fraction(block.temporal_reach, temporal_step)
+            spatial_step *= scale
+        spatial += Fraction(tail, spatial_step)
+
+        bounded = declared(blocks) and is_local([*stages, *attention])
+        return Reach(ceil(spatial) if bounded else None, ceil(temporal))
+
+    def features(
+        self,
+        x: Tensor,
+        step: Callable = call_block,
+        start: int = 0,
+        stop: int | None = None,
+        **frames,
+    ) -> Tensor:
+        """Walk stages `start` to `stop`; `step` runs one block."""
+        walk = zip(
             self.scales,
             self.stages,
             self.stage_projs,
             self.temporal_fuser,
             self.attn_blocks,
-        ):
+        )
+        for scale, stage, proj, fuser, attn in islice(walk, start, stop):
             x = fuser(attn(proj(x)), **frames)
             for block in stage:
                 x = step(block, x)
@@ -102,6 +136,14 @@ class ShuffleTrunk(nn.Module):
     def forward(self, z: Tensor) -> Tensor:
         """Latents to trunk features."""
         return self.features(z)
+
+    def forward_early(self, z: Tensor, stop: int) -> Tensor:
+        """Latents through the stages before `stop`."""
+        return self.features(z, stop=stop)
+
+    def forward_late(self, x: Tensor, start: int) -> Tensor:
+        """`forward_early` output through the stages from `start` on."""
+        return self.features(x, start=start)
 
 
 @TRUNK.register("mlp")
@@ -158,6 +200,18 @@ class VideoTrunk(ShuffleTrunk):
         """Latents `(B, C, T, H, W)` to `(B, T, C, H, W)` features."""
         step = partial(call_block, has_keyframe=has_keyframe)
         return self.features(z.transpose(1, 2), step, has_keyframe=has_keyframe)
+
+    def forward_early(self, z: Tensor, stop: int, has_keyframe: bool = True) -> Tensor:
+        """Latents `(B, C, T, H, W)` through the stages before `stop`, as `(B, T, C, H, W)`."""
+        step = partial(call_block, has_keyframe=has_keyframe)
+        return self.features(
+            z.transpose(1, 2), step, stop=stop, has_keyframe=has_keyframe
+        )
+
+    def forward_late(self, x: Tensor, start: int, has_keyframe: bool = True) -> Tensor:
+        """`forward_early` output through the stages from `start` on."""
+        step = partial(call_block, has_keyframe=has_keyframe)
+        return self.features(x, step, start=start, has_keyframe=has_keyframe)
 
     def forward_stream(
         self,
@@ -224,6 +278,26 @@ class ConvTrunk(nn.Module):
     def head_form(self) -> dict[str, Any]:
         """Head arguments matching this trunk's output."""
         return {"kernel_size": 3, "norm_layer": self.norm_layer, "act": nn.Mish}
+
+    def reach(self, start: int = 0, tail: int = 0) -> Reach:
+        """Reach of stages from `start` plus `tail` output pixels, on that stage's grid."""
+        stages = list(self.stages[start:])
+        blocks = [block for stage in stages for block in stage.blocks]
+        attention = self.attn_blocks[start:]
+
+        # The input conv, then each stage's blocks and its upsampling conv
+        spatial = Fraction(0 if start else 1)
+        spatial_step = 1
+        for scale, stage in zip(self.scales[start:], stages):
+            for block in stage.blocks:
+                spatial += Fraction(block.spatial_reach or 0, spatial_step)
+            spatial_step *= scale
+            if scale > 1:
+                spatial += Fraction(1, spatial_step)
+        spatial += Fraction(tail, spatial_step)
+
+        bounded = declared(blocks) and is_local([*stages, *attention])
+        return Reach(ceil(spatial) if bounded else None)
 
     def forward(self, z: Tensor) -> Tensor:
         """Latents to trunk features; attention precedes each stage."""

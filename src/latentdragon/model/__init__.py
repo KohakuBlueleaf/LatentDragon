@@ -17,6 +17,7 @@ from latentdragon.model.presets import (
     build_autoencoder,
     get_preset,
 )
+from latentdragon.model.reach import Reach
 from latentdragon.model.trunks import TRUNK, ConvTrunk, MLPTrunk, VideoTrunk
 
 __all__ = [
@@ -30,6 +31,7 @@ __all__ = [
     # base classes and configs
     "AEArchConfig",
     "Block",
+    "Reach",
     # concrete classes
     "AttnBlock",
     "Autoencoder",
