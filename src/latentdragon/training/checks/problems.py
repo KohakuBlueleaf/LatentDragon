@@ -50,15 +50,21 @@ def step_problems(k: dict) -> list[str]:
 
 
 def precision_problems(k: dict) -> list[str]:
-    """fp16 scales gradients, so they must not cross a 16-bit wire scaled."""
+    """Precision settings that cannot work together.
+
+    An fp16 wire is safe only with a loss scale: an overflow there is a non-finite gradient the
+    scaler skips and backs off from. Without one, small gradients would flush to zero unseen.
+    """
     problems = []
     if spec_name(k["REDUCER"]) == "none" and len(k["DEVICES"]) > 1:
         problems.append(
             "REDUCER none never averages; use flat or bucketed on several devices"
         )
     precision = spec_name(k["PRECISION"])
-    if precision in SCALED and k["REDUCE_DTYPE"] == "fp16":
-        problems.append(f"PRECISION {precision} cannot reduce on an fp16 wire")
+    if precision not in SCALED and k["REDUCE_DTYPE"] == "fp16":
+        problems.append(
+            f"PRECISION {precision} has no loss scale, so it cannot reduce on an fp16 wire"
+        )
     if precision in TRUE_16 and spec_name(k["OPTIMIZER"]) != "adam16":
         problems.append(
             f"PRECISION {precision} holds 16-bit weights and needs OPTIMIZER adam16"

@@ -1,4 +1,4 @@
-"""bf16 autocast with a bf16 gradient wire; for weights trained in bf16."""
+"""bf16 autocast with an fp32 gradient wire; for weights trained in bf16."""
 
 PRECISION = "bf16"
-REDUCE_DTYPE = "bf16"
+REDUCE_DTYPE = None
