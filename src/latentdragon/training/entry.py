@@ -210,7 +210,7 @@ def _callbacks(k, task, bundles, ema, manager, metric_log, env) -> list:
         )
 
     if k["SAMPLE_EVERY"] > 0 and rank == 0:
-        # Sample grids reuse the first (up to) 8 training items as a fixed batch.
+        # Sample grids: the step's own batch, and the first (up to) 8 training items held fixed.
         held = tree.stack([source[i] for i in range(min(8, len(source)))])
         device_type = torch.device(device).type
         callbacks.append(
@@ -298,7 +298,7 @@ def worker(rank: int, world: int, k: dict, script: str = "") -> None:
 
     images_per_step = k["BATCH_SIZE"] * world
 
-    def end_step(current: TrainState, metrics: dict) -> None:
+    def end_step(current: TrainState, metrics: dict, batch) -> None:
         """Log the step's smoothed metrics with epoch and host timing, then fire callbacks."""
         values = task.smooth_metrics(current.step, metrics)
         values["epoch"] = current.epoch
@@ -309,7 +309,7 @@ def worker(rank: int, world: int, k: dict, script: str = "") -> None:
         metric_log.record(current.step, values)
         if progress is not None:
             progress.advance(current.step)
-        runner.step_end(current)
+        runner.step_end(current, batch)
 
     # Train, then flush callbacks and logs and write the timing report.
     driver.run(batches, state, steps, end_step)

@@ -22,7 +22,7 @@ class ValidationCallback(Callback):
         self.sync = sync
         self.metric_log = metric_log
 
-    def on_step_end(self, state) -> None:
+    def on_step_end(self, state, batch=None) -> None:
         """Evaluate with EMA weights swapped in, then log the metrics."""
         self.task.eval()
         with self.ema.swapped():
@@ -32,48 +32,56 @@ class ValidationCallback(Callback):
 
 
 class SampleCallback(Callback):
-    """Writes a sample grid of a held batch to `samples/<step>.webp` and publishes it.
+    """Writes sample grids and publishes them: the step's own batch and a held batch.
 
-    Rows come from the domain's `to_grid`: the real samples, the first latent tensor of the
-    latent def's continuous view as RGB, the reconstruction, then one reconstruction per eval
-    variant of the latent def below the full latent. A domain without a grid draws none.
+    The first (up to) `count` items of the batch the step trained on go to
+    `samples/train/<step>.webp` under `train/samples`; the held batch, the same at every step,
+    goes to `samples/fixed/<step>.webp` under `train/samples_fixed`. Rows come from the
+    domain's `to_grid`: the real samples, the first latent tensor of the latent def's continuous
+    view as RGB, the reconstruction, then one reconstruction per eval variant of the latent def
+    below the full latent. A domain without a grid draws none.
     """
 
-    KEY = "train/samples"
-
-    def __init__(self, every, task, batch, out_dir, autocast, publish):
+    def __init__(self, every, task, held, out_dir, autocast, publish, count: int = 8):
         self.every = every
         self.task = task
-        self.batch = batch
+        self.held = held
         self.out_dir = Path(out_dir)
         self.autocast = autocast
         self.publish = publish
+        self.count = count
 
     @torch.no_grad()
-    def on_step_end(self, state) -> None:
-        """Reconstruct the held batch, save the grid and send it to the image sinks."""
-        domain = self.task.model.domain
-        if domain.to_grid is None:
+    def on_step_end(self, state, batch=None) -> None:
+        """Reconstruct both batches, save the grids and send them to the image sinks."""
+        if self.task.model.domain.to_grid is None:
             return
-        latent_def = self.task.model.latent
         self.task.eval()
-        with self.autocast():
-            recon, encoded = self.task.reconstruct(self.batch)
-            variants = latent_def.eval_variants()
-            partial = [
-                self.task.reconstruct(self.batch, key)[0] for key in variants[:-1]
-            ]
+        if batch is not None:
+            current = tree.map_tensors(lambda t: t[: self.count], batch)
+            self._grid(current, state.step, "train", "train/samples")
+        self._grid(self.held, state.step, "fixed", "train/samples_fixed")
         self.task.train()
+
+    def _grid(self, batch, step: int, folder: str, key: str) -> None:
+        """One grid of `batch` to `samples/<folder>/<step>.webp`, published under `key`."""
+        domain = self.task.model.domain
+        latent_def = self.task.model.latent
+        with self.autocast():
+            recon, encoded = self.task.reconstruct(batch)
+            variants = latent_def.eval_variants()
+            partial = [self.task.reconstruct(batch, v)[0] for v in variants[:-1]]
 
         fakes = [
             tree.map_tensors(lambda t: t.float(), fake) for fake in (recon, *partial)
         ]
-        grid = domain.to_grid(self.batch, fakes, preview(latent_def.raw(encoded)))
+        grid = domain.to_grid(batch, fakes, preview(latent_def.raw(encoded)))
 
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        path = self.out_dir / f"{state.step}.webp"
+        folder = self.out_dir / folder
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{step}.webp"
         domain.save_grid(grid, path)
-        self.publish(state.step, self.KEY, path)
+        self.publish(step, key, path)
 
 
 def preview(raw: dict) -> torch.Tensor | None:
@@ -96,6 +104,6 @@ class CheckpointCallback(Callback):
         self.bundles = bundles
         self.ema = ema
 
-    def on_step_end(self, state) -> None:
+    def on_step_end(self, state, batch=None) -> None:
         """Save the full training state at this step."""
         self.manager.save(state, self.task.saved_modules(), self.bundles, self.ema)

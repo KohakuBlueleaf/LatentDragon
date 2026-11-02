@@ -32,8 +32,8 @@ def crash_after_first_save(values: dict) -> None:
     """Train until the first checkpoint is written, then die as a kill would."""
     save = CheckpointCallback.on_step_end
 
-    def crash(self, state):
-        save(self, state)
+    def crash(self, state, batch=None):
+        save(self, state, batch)
         raise KeyboardInterrupt
 
     CheckpointCallback.on_step_end = crash

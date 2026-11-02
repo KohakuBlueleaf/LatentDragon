@@ -69,7 +69,7 @@ class Driver:
         return metrics
 
     def run(self, batches, state: TrainState, steps: int, end_step) -> None:
-        """Loop until `steps`; `end_step(state, metrics)` handles logging and cadence."""
+        """Loop until `steps`; `end_step(state, metrics, batch)` handles logging and cadence."""
         iterator = iter(batches)
         while state.step < steps:
             self.timer.start_step(state.step)
@@ -78,4 +78,4 @@ class Driver:
                 batch = self.task.to_device(batch, self.device)
             metrics = self.step(batch, state)
             state.step += 1
-            end_step(state, metrics)
+            end_step(state, metrics, batch)
