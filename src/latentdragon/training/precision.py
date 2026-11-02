@@ -42,13 +42,20 @@ PRECISION.add(
 
 
 def cast_weights(module: torch.nn.Module, dtype: torch.dtype, keep: tuple) -> dict:
-    """Move parameters to `dtype` in place, except names holding an entry of `keep`.
+    """Move parameters to `dtype` in place, except names holding an entry of `keep` and the
+    parameters of modules that set `fp32 = True`.
 
     Returns how many values moved and stayed, so an empty `keep` match shows in the log.
     """
+    held = {
+        id(p)
+        for m in module.modules()
+        if getattr(m, "fp32", False) is True
+        for p in m.parameters()
+    }
     moved, kept = 0, 0
     for name, param in module.named_parameters():
-        if any(token in name for token in keep):
+        if id(param) in held or any(token in name for token in keep):
             kept += param.numel()
             continue
         param.data = param.data.to(dtype)
