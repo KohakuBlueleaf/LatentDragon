@@ -11,6 +11,7 @@ use_config("../data/data_multi.py")
 use_config("../precision/precision_fp16.py")
 
 # Run identity, architecture and data loading
+WANDB_PROJECT = "LatentDragon-img"
 NAME = "kvq_f16c256_production"
 ARCH = "kvq_f16c256_production"
 SIZE = 256
@@ -62,4 +63,4 @@ EMA_DECAY = 0.999
 # Validation, checkpoint and sample cadence (steps)
 VAL_EVERY = 10000
 CKPT_EVERY = 10000
-SAMPLE_EVERY = 1000
+SAMPLE_EVERY = 5000

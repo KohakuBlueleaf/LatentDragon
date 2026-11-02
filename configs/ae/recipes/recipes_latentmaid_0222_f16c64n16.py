@@ -10,6 +10,7 @@ use_config("../data/data_imagenet.py")
 use_config("../precision/precision_fp16.py")
 
 # Run identity, architecture and data loading
+WANDB_PROJECT = "LatentDragon-img"
 NAME = "latentmaid_0222_f16c64n16"
 ARCH = "latentmaid_0222_f16c64n16"
 SIZE = 256

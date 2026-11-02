@@ -10,6 +10,7 @@ use_config("../data/data_imagenet.py")
 use_config("../precision/precision_fp16.py")
 
 # Run identity, architecture and data loading
+WANDB_PROJECT = "LatentDragon-img"
 NAME = "sdvae_f8c4"
 ARCH = "sdvae_f8c4"
 SIZE = 256

@@ -11,6 +11,7 @@ from kohakuengine import use_config
 
 use_config("recipes_kvq_f16c256.py")
 
+WANDB_PROJECT = "LatentDragon-img"
 NAME = "kvq_f16c256_stage2"
 INIT_FROM = os.environ.get("LATENTDRAGON_STAGE1", "stage1")
 FREEZE = ["encoder", "bottleneck", "trunk"]
