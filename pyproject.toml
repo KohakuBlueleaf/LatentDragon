@@ -17,7 +17,7 @@ dependencies = [
     "safetensors",
     "torchvision",
     "torchmetrics[image]",
-    "kohaku-engine",
+    "kohaku-engine>=0.5",
     "anyschedule",
     "optimfactory",
     "sensecraft[full]",

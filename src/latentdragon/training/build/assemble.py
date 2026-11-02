@@ -1,5 +1,6 @@
 """Build-time assembly: knobs resolve to a task, bundles and callbacks once."""
 
+import functools
 import math
 from pathlib import Path
 
@@ -8,8 +9,15 @@ from anyschedule import AnySchedule
 
 from latentdragon.gan import CRITIC, GAN_SCHEME
 from latentdragon.latent import LATENT_TERM, LATENT_VIEW, TEACHER, WEIGHTING
-from latentdragon.model import build_autoencoder, get_preset
-from latentdragon.model.mechanics import apply_compile, apply_recompute
+from latentdragon.model import (
+    allow_donated_buffers,
+    apply_recompute,
+    build_autoencoder,
+    compile_parts,
+    configure,
+    get_preset,
+)
+from latentdragon.model.compile import SETUP
 from latentdragon.objectives import HEAD_OBJECTIVES, OBJECTIVE
 from latentdragon.tasks import TASK, AutoencoderParts
 from latentdragon.tasks.freeze import frozen_parts
@@ -21,17 +29,21 @@ from latentdragon.training.checkpoint.partial import (
 )
 from latentdragon.training.checks.problems import spec_name
 from latentdragon.training.ema import NamedEMA, NoEMA
-from latentdragon.training.parallel import sync
-from latentdragon.training.parallel.reducer import MeanReducer, NoReducer
-from latentdragon.training.precision import PRECISION
+from latentdragon.training.optim import Adam16
+from latentdragon.training.parallel.reducer import REDUCER
+from latentdragon.training.precision import PRECISION, cast_weights
 from latentdragon.training.scaler import DynamicScaler, NoScaler
+from latentdragon_common.log import get_logger
 from latentdragon_common.registry import Registry, build
 from latentdragon_kernels.tuning import tuner
 
 OPTIMIZER = Registry("optimizer")
-OPTIMIZER.add("adam", torch.optim.Adam)
-OPTIMIZER.add("adamw", torch.optim.AdamW)
+OPTIMIZER.add("adam", functools.partial(torch.optim.Adam, fused=True))
+OPTIMIZER.add("adamw", functools.partial(torch.optim.AdamW, fused=True))
+OPTIMIZER.add("adam16", Adam16)
 LOSS_MODES = {"image": "2d", "video": "3d"}
+KEEP_FP32 = ("norm", "bias", "bottleneck")
+log = get_logger(__name__)
 WIRE_DTYPES = {None: None, "bf16": torch.bfloat16, "fp16": torch.float16}
 
 
@@ -59,8 +71,19 @@ def _objective(k: dict, arch):
     )
 
 
+def _cast_to_policy(k: dict, model, critic) -> None:
+    """Hold the weights in 16 bits under a `-true` precision."""
+    weights = build(k["PRECISION"], PRECISION).weights
+    if weights is None:
+        return
+    log.info("weights cast", **cast_weights(model, weights, KEEP_FP32))
+    if critic is not None:
+        cast_weights(critic, weights, KEEP_FP32)
+
+
 def build_task(k: dict, device):
     """Model, critic, objective, scheme, views and terms, on `device`."""
+    configure(k["COMPILE"], k["COMPILE_MODE"], k["COMPILE_DYNAMIC"], k["COMPILE_TUNE"])
     arch = arch_config(k)
     model = build_autoencoder(arch)
 
@@ -71,6 +94,7 @@ def build_task(k: dict, device):
         refuse_frozen_missing(report, k["FREEZE"])
 
     scheme = build(k["GAN_SCHEME"], GAN_SCHEME)
+    allow_donated_buffers(not scheme.retained_backward)
     critic = None
     if scheme.uses_critic:
         critic = build(k["CRITIC"], CRITIC, input_nc=arch.image_dim)
@@ -98,18 +122,25 @@ def build_task(k: dict, device):
     # Memory/speed transforms, then move everything to the device.
     if k["GRAD_CKPT"]:
         apply_recompute(model)
-    if k["COMPILE"]:
-        apply_compile(model)
-    model.to(device)
+    compile_parts((model.encoder, model.trunk, model.head))
+    if k["COMPILE_LOSS"]:
+        parts.objective.compile(**SETUP.kwargs())
+        if critic is not None and not scheme.second_order:
+            critic.compile(**SETUP.kwargs())
+    layout = torch.channels_last if k["CHANNELS_LAST"] else torch.preserve_format
+    task.memory_format = layout
+    model.to(device, memory_format=layout)
     if critic is not None:
-        critic.to(device)
+        critic.to(device, memory_format=layout)
     task.term_modules.to(device)
+    _cast_to_policy(k, model, critic)
 
     # Bind kernels on the device, or on cpu when KERNELS is not auto.
     tuner.set_mode(k["KERNEL_TUNE"])
     bind_device = torch.device(device) if k["KERNELS"] == "auto" else "cpu"
     model.bind_kernels(bind_device)
-    task.bind_device(device)
+    compute = build(k["PRECISION"], PRECISION).dtype
+    task.bind_device(device, compute if k["LOSS_16BIT"] else None)
     return task
 
 
@@ -119,7 +150,8 @@ def build_bundles(task, k: dict, total_steps: int) -> dict[str, Bundle]:
     if precision.scaled and any(term.group != "model" for term, _ in task.terms):
         raise ValueError("latent terms need the model group under fp16")
 
-    wire = WIRE_DTYPES[k["REDUCE_DTYPE"]]
+    # 16-bit gradients still reduce in fp32 unless a wire dtype is asked for
+    wire = WIRE_DTYPES[k["REDUCE_DTYPE"]] or (precision.weights and torch.float32)
     schedule_config = dict(k["SCHEDULER_CONFIG"])
     schedule_config["end"] = total_steps
 
@@ -142,7 +174,12 @@ def build_bundles(task, k: dict, total_steps: int) -> dict[str, Bundle]:
             optimizer,
             AnySchedule(optimizer, config={"lr": schedule_config}),
             DynamicScaler() if precision.scaled else NoScaler(),
-            MeanReducer(wire) if sync.active() else NoReducer(),
+            build(
+                k["REDUCER"],
+                REDUCER,
+                params=[p for group in params for p in group["params"]],
+                wire=wire,
+            ),
             k["GRAD_CLIP"],
         )
     return bundles

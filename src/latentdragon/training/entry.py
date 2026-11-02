@@ -27,7 +27,7 @@ from latentdragon.training.callbacks.validation import (
     ValidationCallback,
 )
 from latentdragon.training.checkpoint import CheckpointManager, latest
-from latentdragon.training.checks import all_problems
+from latentdragon.training.checks import all_problems, compile_notes
 from latentdragon.training.drivers.native import Driver
 from latentdragon.training.logging.metrics import MetricLog
 from latentdragon.training.logging.sinks import ConsoleSink, JsonlSink, WandbSink
@@ -76,12 +76,15 @@ def check(knobs: dict, script: str) -> None:
         "DOMAIN": derived["domain"],
         "HEAD": derived["head"],
         "BOTTLENECK": derived["bottleneck"],
+        "TRUNK": derived["trunk"],
     }
     problems += all_problems(view)
     problems += freeze_problems(arch, knobs["FREEZE"])
     if knobs["RESUME"] is not None:
         problems += drift_problems(resolve_run(knobs), knobs)
     raise_problems(problems)
+    for note in compile_notes(view):
+        log.warning("compile", note=note)
 
 
 def freeze_problems(arch, paths: list[str]) -> list[str]:
@@ -211,6 +214,8 @@ def _start(rank: int, world: int, k: dict) -> tuple:
         backend = "nccl" if "cuda" in device else "gloo"
         timeout = timedelta(hours=k["DIST_TIMEOUT_HOURS"])
         dist.init_process_group(backend, rank=rank, world_size=world, timeout=timeout)
+    torch.set_num_threads(k["CPU_THREADS"])
+    torch.backends.cudnn.benchmark = k["CUDNN_BENCHMARK"]
     torch.manual_seed(k["SEED"])
     run_dir = resolve_run(k)
     if rank == 0:

@@ -5,10 +5,15 @@ from pathlib import Path
 from latentdragon.gan import CRITIC, GAN_SCHEME
 from latentdragon.latent import LATENT_TERM, LATENT_VIEW
 from latentdragon.model import HEAD
+from latentdragon.model.compile import SCOPES
 from latentdragon.objectives import HEAD_OBJECTIVES, OBJECTIVE
 from latentdragon.training.checkpoint import latest
 from latentdragon.training.precision import PRECISION
 from latentdragon_common.registry import Registry, build
+
+SECOND_ORDER = ("r3gan", "stylegan2")
+SCALED = ("fp16", "fp16-true")
+TRUE_16 = ("bf16-true", "fp16-true")
 
 
 def spec_name(spec) -> str | None:
@@ -46,9 +51,19 @@ def step_problems(k: dict) -> list[str]:
 
 def precision_problems(k: dict) -> list[str]:
     """fp16 scales gradients, so they must not cross a 16-bit wire scaled."""
-    if k["PRECISION"] == "fp16" and k["REDUCE_DTYPE"] == "fp16":
-        return ["PRECISION fp16 cannot reduce scaled gradients on an fp16 wire"]
-    return []
+    problems = []
+    if spec_name(k["REDUCER"]) == "none" and len(k["DEVICES"]) > 1:
+        problems.append(
+            "REDUCER none never averages; use flat or bucketed on several devices"
+        )
+    precision = spec_name(k["PRECISION"])
+    if precision in SCALED and k["REDUCE_DTYPE"] == "fp16":
+        problems.append(f"PRECISION {precision} cannot reduce on an fp16 wire")
+    if precision in TRUE_16 and spec_name(k["OPTIMIZER"]) != "adam16":
+        problems.append(
+            f"PRECISION {precision} holds 16-bit weights and needs OPTIMIZER adam16"
+        )
+    return problems
 
 
 def component_problems(k: dict) -> list[str]:
@@ -107,7 +122,7 @@ def _quantized(spec) -> bool:
 def latent_problems(k: dict) -> list[str]:
     """Latent views and terms against domain, codebook, freeze and teacher knobs."""
     problems = []
-    if k["PRECISION"] == "fp16":
+    if k["PRECISION"] in SCALED:
         for spec in k["LATENT_TERMS"]:
             name = spec_name(spec["term"])
             if name in LATENT_TERM and LATENT_TERM.get(name).group != "model":
@@ -163,6 +178,45 @@ def stage_problems(k: dict) -> list[str]:
     return problems
 
 
+def compile_problems(k: dict) -> list[str]:
+    """Compile settings that cannot run."""
+    problems = []
+    if k["COMPILE"] not in SCOPES:
+        problems.append(f"COMPILE {k['COMPILE']!r} is not one of {SCOPES}")
+    if k["COMPILE_MODE"] == "reduce-overhead" and spec_name(k["REDUCER"]) == "bucketed":
+        problems.append(
+            "COMPILE_MODE reduce-overhead reuses memory that gradient views alias; "
+            "set REDUCER flat"
+        )
+    return problems
+
+
+def compile_notes(k: dict) -> list[str]:
+    """Settings that run but cannot help, so a run starts knowing what it paid for."""
+    notes = []
+    if k["COMPILE"] == "function" and spec_name(k["TRUNK"]) == "conv":
+        notes.append(
+            "COMPILE function covers norms and SwiGLU only, which leaves a conv trunk's "
+            "convolutions eager; use module or model"
+        )
+    if k["COMPILE_LOSS"] and k["COMPILE"] == "off":
+        notes.append(
+            "COMPILE_LOSS with COMPILE off compiles the losses but not the model"
+        )
+    if k["COMPILE_LOSS"] and spec_name(k["GAN_SCHEME"]) in SECOND_ORDER:
+        notes.append(
+            f"GAN_SCHEME {spec_name(k['GAN_SCHEME'])} differentiates through a gradient, "
+            "which a compiled graph cannot do, so its critic stays eager"
+        )
+    if k["COMPILE_LOSS"] and not k["LOSS_CONFIGS"]:
+        notes.append("COMPILE_LOSS has no loss network to compile")
+    if k["COMPILE"] in ("module", "model") and k["DOMAIN"] == "video":
+        notes.append(
+            "video chunks change shape; set COMPILE_DYNAMIC if clip length varies"
+        )
+    return notes
+
+
 def data_problems(k: dict) -> list[str]:
     """A run needs at least one training source."""
     return [] if k["TRAIN_SOURCES"] else ["TRAIN_SOURCES is empty"]
@@ -178,5 +232,6 @@ def all_problems(k: dict) -> list[str]:
         *head_problems(k),
         *latent_problems(k),
         *stage_problems(k),
+        *compile_problems(k),
         *data_problems(k),
     ]
