@@ -1,109 +1,140 @@
 # Model
 
-`Autoencoder = encoder + bottleneck + trunk + head`. `encode`, `bottleneck`, `decode` and
-`head` are separately callable, `forward` composes them, and the model holds no loss
-knowledge.
+An autoencoder is three arrows over named slots:
+
+```text
+domain -> encoder -> latent.serialize -> latent -> latent.deserialize -> decoder -> head -> domain
+```
+
+Every value crossing an arrow is a dict of named slots. A slot holds a batch-first tensor or a
+pytree of them; that is the only structural rule. The domain names the data slots, each part
+declares the slots it reads (`inputs`) and writes (`outputs`), and the build refuses a part that
+reads a slot the one before it does not write. Shapes, widths, counts and dtypes inside a slot
+belong to the parts.
 
 ```python
 from kohakuengine import load_config_file
-from latentdragon.io.arch_json import arch_from_json
 from latentdragon.model import build_autoencoder
 
 arch = load_config_file("configs/ae/arch/sdvae.py").globals_dict["ARCH"]
-model = build_autoencoder(arch_from_json(arch))
-raw = model.encode(x)                # channels at dim 1
-out = model.bottleneck(raw, offset)  # BottleneckOut
-features = model.decode(out.z)       # trunk features
-x_hat = model.head(features)
+model = build_autoencoder(arch)
+
+encoded = model.encode({"x": x})          # Encoded: latent, losses, logs, extras
+features = model.decode(encoded.latent)   # the output latent, e.g. {"y": ...}
+x_hat = model.head(features)              # data slots, e.g. {"x": ...}
+packed = model.latent.pack(encoded.latent)
+x_hat = model.head(model.decode(packed))  # a stored latent decodes the same way
 ```
 
-## Parts
+## ARCH
 
-| Registry | Entries |
-|---|---|
-| `ENCODER` | `mlp`, `conv`, `video` |
-| `TRUNK` | `mlp`, `conv`, `video` |
-| `BLOCK` | `mlp`, `res`, `mlp3d` |
-| `NORM` | `rms`, `layer`, `group32` |
-| `HEAD` | `regression` |
+```python
+ARCH = {
+    "domain": {"name": "image"},
+    "encoder": {"name": "sdvae", "out_channels": 8, "stages": [...], "norm": "group32"},
+    "latent": "kl",
+    "decoder": {"name": "sdvae", "in_channels": 4, "stages": [...], "norm": "group32"},
+    "head": {"name": "conv", "in_channels": 128, "kernel_size": 3, "norm": "group32", "act": "mish"},
+}
+```
 
-`norm_layer` takes a registry name, a dotted path or a factory. `build_block` is the only
-place a block is built.
+Each entry is a registry choice: a name, a dotted path, or `{"name": ..., **kwargs}`. The
+framework passes no arguments of its own, so every width and slot name is written in the
+entry. `domain` defaults to `image` and `latent` to `identity`.
 
-Stage tuples: `mlp` uses `(scale, hidden, mlp, blocks)`, `conv` uses
-`(scale, hidden, blocks)`, `video` uses `(t_scale, scale, hidden, mlp, blocks)`. Order
-matters. `mlp` and `video` trunks walk `block_configs` in reverse, so a config reads from
-the pixel side. `conv` trunks walk it forward.
+## The contract
 
-## One skeleton
+`latentdragon/model/core/contracts.py` defines it.
 
-`ShuffleEncoder` and `ShuffleTrunk` hold the pixel-shuffle stage walk for image and video.
-The subclass picks the stage tuple, the block, the conv layer and the fuser at build; the
-walk has no rank branch. `F.pixel_shuffle` accepts leading dimensions, so there is no
-per-frame helper. A stage with no temporal scale gets `IdentityFuser`, which takes
-`has_keyframe` like the real fusers, so the walk never tests a fuser's type.
+| Part | Registry | Call | Declares |
+| --- | --- | --- | --- |
+| encoder | `ENCODER` | `forward(slots) -> slots` | `inputs`, `outputs` |
+| latent def | `LATENT` | `serialize(slots, offset) -> Encoded`, `deserialize(latent) -> slots`, `pack(latent) -> latent` | `inputs`, `outputs`, `decoder_slots` |
+| decoder | `DECODER` | `forward(slots) -> slots` | `inputs`, `outputs` |
+| head | `HEAD` | `forward(slots) -> slots` | `inputs`, `outputs`, `objective` |
 
-The conv classes keep their own short walk because their stage owns its sampler and their
-keys are `stages.N.blocks.M`.
+`Encoded` carries `latent` (what `deserialize` reads), `losses` (live scalars the task weights
+by name through `AUX_WEIGHTS`), `logs` (detached scalars whose keys carry their section) and
+`extras` (private to the latent def). See [latent](latent.md) for the latent defs.
 
-## Attention placement
+`TensorPart` is a convenience base for a part with one input slot and one output slot: it
+implements `forward` around a slot-local `tensor(x)`.
 
-Each class keeps its historical slot, and the slots differ:
+## Capabilities
 
-| Class | Where | Channels | Index |
-|---|---|---|---|
-| `mlp` encoder | after the stage's blocks | `hidden` | `block_configs` |
-| `conv` encoder | after the sampler | `hidden` | `block_configs` |
-| `mlp` trunk | after the stage proj, before the blocks | `hidden` | reversed internally, `flags[i]` matches `block_configs[i]` |
-| `conv` trunk | before the stage | channels entering the stage | `block_configs` |
+Anything else a part offers is optional, and whoever needs it looks it up and refuses clearly
+when it is missing.
 
-Video has no attention slots.
+| Capability | On | Used by |
+| --- | --- | --- |
+| `last_layer` | head | adaptive GAN weight (`taming` with `adaptive_weight`) |
+| `last_layer` | encoder | latent-term `adaptive` weighting; a latent def's `init_from_encoder` |
+| `spatial_scale`, `temporal_scale` | encoder, decoder | the scale check at build; tiled decoding |
+| `reach`, `scales`, `forward_early`, `forward_late`, `forward_stream`, `tensor` | decoder | decode strategies, see [inference](inference.md) |
+| `forward_stream` | encoder | `stream_encode` |
+| `raw`, `eval_variants`, `variant` | latent def | latent stats, sample previews, nested evaluation |
+| `codebook_size`, `codes`, `quantizer` | latent def | code usage in training and validation |
+| `objective`, `needs_pixels` | head | objective selection and config checks |
+| `function_scope_gaps` | decoder | a compile-scope note |
 
-## Head
+## Built-in families
 
-The old decoders split into trunk and `regression` head, so GAN schemes read `head.anchor`
-rather than a decoder attribute, and later stage runs can swap the head. The trunk supplies
-`head_form`:
+| Registry | Name | Slots | Stage tuples |
+| --- | --- | --- | --- |
+| `ENCODER` | `latentmaid` | `x -> h` | `(scale, hidden, mlp, blocks)` |
+| `ENCODER` | `latentmaid_video` | `x -> h` | `(t_scale, scale, hidden, mlp, blocks)` |
+| `ENCODER` | `sdvae` | `x -> h` | `(scale, hidden, blocks)` |
+| `DECODER` | `latentmaid` | `z -> y` | `(scale, hidden, mlp, blocks)`, the last runs first |
+| `DECODER` | `latentmaid_video` | `z -> y` | as its encoder, the last runs first |
+| `DECODER` | `sdvae` | `z -> y` | `(scale, hidden, blocks)`, the first runs first |
+| `HEAD` | `conv` | `y -> x` | norm, activation, `kernel_size` projection; `video` projects per frame |
+| `HEAD` | `identity` | renames slots | for decoders that end in the signal |
 
-| Trunk | Head |
-|---|---|
-| `mlp` | 1x1 conv |
-| `conv` | norm, Mish, 3x3 conv |
-| `video` | frame-wise 1x1 conv |
+Every slot name is a keyword (`input`, `output`), so the same family serves any slot. The
+blocks, norms and stage helpers the families share live in `latentdragon/model/nn/`.
+
+`latentmaid` stages are pixel-unshuffle (encoder) or pixel-shuffle (decoder) walks of MLP
+blocks; `sdvae` stages are residual conv stages with stride-2 down and nearest-neighbour up.
+Attention slots differ per family:
+
+| Family | Where | Channels |
+| --- | --- | --- |
+| `latentmaid` encoder | after the stage's blocks | `hidden` |
+| `sdvae` encoder | after the sampler | `hidden` |
+| `latentmaid` decoder | after the stage proj, before the blocks; `attn[i]` matches `stages[i]` | `hidden` |
+| `sdvae` decoder | before the stage | channels entering the stage |
+
+The video families have no attention slots.
 
 ## Init
 
-Each part runs `mup_init`; the head then runs `mup_init_output` on its projection. The
-encoder output layer gets plain `mup_init` because the output variant gives a latent with a
-very small std. `build_autoencoder` calls `bottleneck.init_encoder_out` after that, which is
-how `kl` zeroes the logvar half, so a posterior starts at std near 1.
+Each part runs `mup_init`; the `conv` head then runs `mup_init_output` on its projection. When
+the encoder declares `last_layer` and the latent def has `init_from_encoder`, the build calls it:
+`kl` zeroes the logvar half, so a posterior starts at std near 1.
 
 ## Video
 
-Pixels are `(B, T, C, H, W)`. Latents are `(B, C, T, H, W)`: the encoder and trunk swap
-axes at the latent boundary so a bottleneck sees channels at dim 1 for any rank. The research
-encoder returned `(B, T, C, H, W)` latents, so code written against it must transpose. The first
-frame is a keyframe: it passes through the temporal conv and the fusers untouched, so a
-clip has `1 + n * k` frames.
+Clips are `(B, T, C, H, W)`. The LatentMaid video encoder writes `(B, C, T, H, W)` and its
+decoder reads that and writes `(B, T, C, H, W)` features. The first frame is a keyframe: it passes
+through the temporal conv and the fusers untouched, so a clip has `1 + n * k` frames.
 
 `forward_stream` runs one chunk with the cache from the previous chunk and returns the new
 cache. Start with `has_keyframe=True` and an empty list, then pass `False`. The result
-concatenates to the full forward. On the trunk it returns features; run the head on them.
-
-Chunk sizes must be whole groups for the temporal scale of the encoder. The cache keeps the
-last `kernel_size - 1` frames of history across chunks, even when a chunk is shorter than
-that.
-
-The temporal conv is a full `(C, C, 3)` Conv1d, not depthwise.
+concatenates to the full forward. Chunk sizes must be whole groups for the encoder's temporal
+scale. The temporal conv is a full `(C, C, 3)` Conv1d, not depthwise.
 
 ## Mechanics
 
 `apply_recompute(model)` replaces `block.forward` with a non-reentrant checkpoint of the
-original, so no block has a checkpoint branch and state dict keys stay as they are. Attention
-blocks stay outside it, as before.
+original, so no block has a checkpoint branch and state dict keys stay as they are.
 
 `COMPILE` sets the compile scope: `off`, `function` (norms and activations), `module` (blocks)
-or `model` (encoder, trunk and head as one graph each). `compile_wrapper` marks a function or
-block; `compile_parts` compiles whole parts. A wrapped function runs inline under an enclosing
-compile, so the scopes do not conflict. A checkpointed block is compiled as one recompute
-graph, and no scope adds an `_orig_mod` prefix to state dict keys.
+or `model` (encoder, decoder and head as one graph each). The latent def stays eager, because
+its kernels launch Triton. A wrapped function runs inline under an enclosing compile, so the
+scopes do not conflict, and no scope adds an `_orig_mod` prefix to state dict keys.
+
+## Examples
+
+`examples/` holds two runnable toys whose parts are all registered from outside the framework:
+paired video and audio data with one unified latent, and a clip packed into a keyframe latent
+and a vector-quantized motion latent. See [examples](../../examples/README.md).

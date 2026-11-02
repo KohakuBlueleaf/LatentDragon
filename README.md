@@ -7,7 +7,7 @@ train both.
 
 - **LatentMaid** is an autoencoder family. Its encoder works on pixel-unshuffled features with
   cheap blocks: a depthwise 3x3 convolution and a SwiGLU MLP. An SD-VAE style convolutional encoder
-  and decoder sit next to it. The bottleneck is continuous (identity or KL, optionally nested) or
+  and decoder sit next to it. The latent is continuous (identity or KL, optionally nested) or
   discrete (KohakuVQ). Video uses the same blocks with causal temporal convolution.
 - **KohakuVQ** generates a large codebook from a low-dimensional learned base with a small shared MLP.
   Every code update moves the shared weights, and with them every code, and the
@@ -15,52 +15,78 @@ train both.
 - **Training** runs on its own loop with GAN schemes, EMA, exact resume and staged
   freezing. Fused Triton kernels for the VQ hot path are included as an add-on.
 
+## The model contract
+
+An autoencoder is three arrows over named slots:
+
+```text
+domain -> encoder -> latent def -> latent -> latent def -> decoder -> head -> domain
+```
+
+Every value crossing an arrow is a dict of named slots, each a batch-first tensor or a pytree of
+them. The domain names the data slots; each part declares the slots it reads and writes, and the
+build checks the chain. The latent def is the serdes between the halves: `serialize` writes the
+latent and its losses, `deserialize` reads a live or stored latent into decoder slots, and `pack`
+gives the storable form, so a vector quantizer stores indices and reads them back through its own
+codebook. Shapes and widths inside a slot belong to the parts, so paired data such as video with
+audio, several latents such as a keyframe and motion tokens, or a model from another library fit
+the same trainer; [`examples/`](examples) trains both kinds on the CPU.
+
+```python
+ARCH = {
+    "domain": "image",
+    "encoder": {"name": "sdvae", "out_channels": 8, "stages": [...], "norm": "group32"},
+    "latent": "kl",
+    "decoder": {"name": "sdvae", "in_channels": 4, "stages": [...], "norm": "group32"},
+    "head": {"name": "conv", "in_channels": 128, "kernel_size": 3, "norm": "group32", "act": "mish"},
+}
+```
+
+Each part is a registry choice with its own keyword arguments, written in the config. Anything
+else a part offers (a last layer for adaptive weights, a reach for exact tiling, streaming) is a
+capability that whoever needs it checks for. See [model](docs/concepts/model.md) and
+[latent](docs/concepts/latent.md).
+
 ## LatentMaid
 
-An autoencoder is `encoder -> bottleneck -> trunk -> head`. Each part is registered in a registry
-and built from the `ARCH` dict of a config, so a config picks parts instead of editing code. The decoder is a trunk plus
-a head (its last projection); a stage-two run can freeze everything but the head.
-
-**MLP encoder and decoder.** A stage is `(scale, hidden, mlp, blocks)`: pixel-unshuffle by
-`scale`, a 1x1 projection to `hidden` channels, then `blocks` blocks. A block is
+**MLP encoder and decoder** (`latentmaid`). A stage is `(scale, hidden, mlp, blocks)`:
+pixel-unshuffle by `scale`, a 1x1 projection to `hidden` channels, then `blocks` blocks. A block is
 
 ```text
 x + SwiGLU(DepthwiseConv3x3(RMSNorm(x)))
 ```
 
 with the SwiGLU applied over channels at every position (`mlp` hidden units). The decoder mirrors
-the encoder with pixel-shuffle, and ends in a 1x1 convolution to image channels. Attention can be
-inserted per stage. The MLP blocks are local operations, so every output position depends on a
-bounded receptive field.
+the encoder with pixel-shuffle. Attention can be inserted per stage. The MLP blocks are local
+operations, so every output position depends on a bounded receptive field.
 
-**Convolutional encoder and decoder.** SD-VAE style: residual blocks (norm, SiLU, 3x3 convolution,
+**Convolutional encoder and decoder** (`sdvae`). Residual blocks (norm, SiLU, 3x3 convolution,
 twice) with a stride-2 convolution down and nearest-neighbour upsampling plus convolution up.
 Norms are `rms`, `layer` or `group32`.
 
-**Video.** The MLP blocks with a causal temporal convolution mixing frames, temporal down- and
-upsampling, and the first frame as a keyframe. `forward_stream` encodes or decodes a clip in chunks
-with cached frames and gives the same result as the full forward.
+**Video** (`latentmaid_video`). The MLP blocks with a causal temporal convolution mixing frames,
+temporal down- and upsampling, and the first frame as a keyframe. `forward_stream` encodes or
+decodes a clip in chunks with cached frames and gives the same result as the full forward.
 
-**Bottlenecks.**
+**Latent defs.**
 
 | Name | What it does |
 | --- | --- |
 | `identity` | the encoder output is the latent |
 | `kl` | the encoder emits mean and log-variance, sampled in training; KL summed over channels and positions, averaged over the batch |
+| `vq` | KohakuVQ, below; the stored latent is the code indices |
 | `nested` | keeps a prefix of the latent channels per sample, cycling through the widths, for example `(8, 16, 32, 64)`; validation reports every width. Around `vq`, `unit="partition"` counts partitions and `jitter` shifts a sample's width by up to one step |
-| `vq` | KohakuVQ, below |
+| `slots` | independent latent defs side by side, one per slot |
 
-**Architecture in the config.** `ARCH` is a dict of `AEArchConfig` fields written in the config
-file, so every encoder, bottleneck, quantizer and trunk setting is a knob. `configs/ae/arch/` holds
-the published layouts, pulled in with `use_config`:
+**Published layouts.** `configs/ae/arch/` holds them, pulled in with `use_config`:
 
-| File | Encoder / decoder | Latent | Bottleneck |
-| --- | --- | --- | --- |
-| `sdvae.py` | SD-VAE conv / SD-VAE conv | f8, 4 ch | KL |
-| `fluxvae.py` | SD-VAE conv / SD-VAE conv | f8, 16 ch | KL |
-| `latentmaid/2222.py` | MLP, 2 blocks at f1, f2, f4, f8 / SD-VAE conv | f8, 4 ch | KL |
-| `latentmaid/0222.py` | MLP, 2 blocks at f2, f4, f8 / SD-VAE conv | f8, 4 ch | KL |
-| `latentmaid/0022.py` | MLP, 2 blocks at f4, f8 / SD-VAE conv | f8, 4 ch | KL |
+| File | Encoder / decoder | Latent |
+| --- | --- | --- |
+| `sdvae.py` | SD-VAE conv / SD-VAE conv | f8, 4 ch, KL |
+| `fluxvae.py` | SD-VAE conv / SD-VAE conv | f8, 16 ch, KL |
+| `latentmaid/2222.py` | MLP, 2 blocks at f1, f2, f4, f8 / SD-VAE conv | f8, 4 ch, KL |
+| `latentmaid/0222.py` | MLP, 2 blocks at f2, f4, f8 / SD-VAE conv | f8, 4 ch, KL |
+| `latentmaid/0022.py` | MLP, 2 blocks at f4, f8 / SD-VAE conv | f8, 4 ch, KL |
 
 ## KohakuVQ
 
@@ -203,7 +229,7 @@ Every knob problem is reported together, before any GPU work:
 
 **What a run does.**
 
-- Loss: sensecraft terms (`LOSS_CONFIGS`, a list of `sensecraft.Term`) on the reconstruction, plus the bottleneck loss.
+- Loss: sensecraft terms (`LOSS_CONFIGS`, a list of `sensecraft.Term`, or a dict of them per data slot) on the reconstruction, plus the latent def's losses weighted by `AUX_WEIGHTS`.
 - GAN: `taming` (hinge, with the batch-level adaptive weight at the head's last layer), `r3gan` or
   `stylegan2`, with a PatchGAN critic. It starts at `disc_start`.
 - Recipes train in fp16 with fp32 weights and a loss scaler per network. `bf16`, `fp32`, `bf16-true` and `fp16-true` are also available; the last two hold 16-bit weights and need `OPTIMIZER=adam16`.
@@ -234,8 +260,8 @@ the totals as `model/params_*` summary values.
 
 | Section | What it holds |
 | --- | --- |
-| `train/` | `eloss`, `psnr` and `ssim` smoothed, `nll`, `loss`, each loss term, `kl`, `z_mean`, `z_std` |
-| `vq/` | smoothed `loss`, `usage`, `perplexity`, `perplexity_rate`, the loss parts, `usage_ema` |
+| `train/` | `eloss`, `psnr` and `ssim` smoothed, `nll`, `loss`, each loss term, each latent def loss (`kl`, `vq`), `z_mean`, `z_std` |
+| `vq/` | `usage`, `perplexity`, `perplexity_rate`, the loss parts, the `usage_window` over `USAGE_WINDOW` steps |
 | `gan/` | `g_loss`, `d_loss`, critic logits, the adaptive weight and its scale |
 | `<key>_ema` | next to every raw scalar of `train/`, `vq/`, `gan/` and `optim/grad_norm/`: our own EMA, decay `min(0.995, step / (step + 10))`, so a raw spike and the trend sit in one section |
 | `latent_stat_mean/`, `latent_stat_std/` | per latent channel |
@@ -253,7 +279,7 @@ tokens stay the same, so a generator trained on them stays valid:
 
 ```python
 INIT_FROM = "runs/<name>/<id>/checkpoints/step_00400000"
-FREEZE = ["encoder", "bottleneck", "trunk"]
+FREEZE = ["encoder", "latent", "decoder"]
 ```
 
 `FREEZE` takes any dotted model path. Frozen parts stay in eval mode and out of every optimizer.
@@ -284,27 +310,28 @@ kogine run scripts/tools/convert_legacy.py --set SOURCE=old.ckpt --set TARGET=co
 
 ## Decode large latents
 
-`decode` runs a latent through a strategy selected by name. Tile sizes are output pixels.
+`decode` runs a live or stored latent through a strategy selected by name, on a single-slot
+decoder and head. Tile sizes are output pixels.
 
 ```python
 from latentdragon.inference import decode
 
-out = decode(model, z, {"name": "tiled", "tile": [512, 512]})
-out = decode(model, z, {"name": "staged_tiled", "stages": 2, "tile": [512, 512]})
-out = decode(model, z, "streaming")
-out = decode(model, z, {"name": "streaming_tiled", "tile": [1024, 1024]})
+out = decode(model, latent, {"name": "tiled", "tile": [512, 512]})
+out = decode(model, latent, {"name": "staged_tiled", "stages": 2, "tile": [512, 512]})
+out = decode(model, latent, "streaming")
+out = decode(model, latent, {"name": "streaming_tiled", "tile": [1024, 1024]})
 ```
 
 | Strategy | Use it for |
 | --- | --- |
 | `tiled` | large images and video; `tile_t` also tiles time, and `inner` chooses how each tile decodes |
-| `staged_tiled` | running the early trunk stages whole and tiling the late ones |
+| `staged_tiled` | running the early decoder stages whole and tiling the late ones |
 | `streaming` | long video at constant memory, frame chunks as they finish |
 | `streaming_tiled` | long, large video, one causal cache per tile |
 
 Overlap comes from `model.reach()`, which is summed from what each block declares, so a tiled decode
 matches the full decode up to floating point. Attention and group norm read every position; on those
-models set `overlap` to accept an approximate result. Streaming needs the video trunk. See
+models set `overlap` to accept an approximate result. Streaming needs the video decoder. See
 [inference](docs/concepts/inference.md).
 
 ## Extend
@@ -313,9 +340,11 @@ Parts are registered by name, and a dotted path works wherever a name does.
 
 | Add | Registry |
 | --- | --- |
-| encoder, trunk, block, norm | `ENCODER`, `TRUNK`, `BLOCK`, `NORM` |
-| head and its objective | `HEAD`, `HEAD_OBJECTIVES` |
-| bottleneck, codebook | `BOTTLENECK`, `CODEBOOK`, `QUANTIZER` |
+| encoder, decoder, head | `ENCODER`, `DECODER`, `HEAD`, each a `Part` over named slots |
+| latent def | `LATENT`, a `LatentDef` with `serialize`, `deserialize`, `pack` |
+| block, norm | `BLOCK`, `NORM` |
+| codebook, quantizer | `CODEBOOK`, `QUANTIZER` |
+| domain (data slots) | `DOMAIN` |
 | critic, GAN scheme | `CRITIC`, `GAN_SCHEME` |
 | decode strategy | `DECODE` |
 | latent augmentation, loss, frozen teacher | `LATENT_VIEW`, `LATENT_TERM`, `TEACHER` |
@@ -328,10 +357,11 @@ src/latentdragon_common/    registry, config checks, logging
 src/latentdragon_kernels/   Triton and eager ops, per-card tuning
 src/latentdragon_data/      image and video sources, resumable loader
 src/latentdragon/
-  model/  bottleneck/  vq/  domain/  gan/  latent/  objectives/
-  tasks/  training/  eval/  inference/  io/
+  model/                    core (slot contract, build), families, heads, latents, nn, runtime
+  vq/  domain/  gan/  latent/  objectives/  tasks/  training/  eval/  inference/  io/
 configs/ae/                 arch, data, precision, train setups, recipes
 scripts/                    train, export, tools
+examples/                   paired-data and packed-latent toys on the slot contract
 experiments/                decode strategies, kernel precision, throughput
 docs/                       concepts, guides
 checks/                     behavior scripts, run by hand; see checks/README.md

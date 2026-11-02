@@ -1,6 +1,6 @@
 # LatentDragon
 
-Image and video latent autoencoder framework: VQ and continuous bottlenecks, GAN schemes,
+Latent autoencoder framework over named slots: VQ and continuous latent defs, GAN schemes,
 staged heads and latent slots, on a selection-based trainer. Sibling to
 KohakUwULLM and KohakuMoss; same house conventions.
 
@@ -11,9 +11,9 @@ KohakUwULLM and KohakuMoss; same house conventions.
 | `latentdragon_common` | registry, build, imports, log, knobs, null callables | no torch, no sibling |
 | `latentdragon_kernels` | ops, registry, eager, gemm and Triton backends, tuning, error stats | common |
 | `latentdragon_data` | sources, epoch-resumable loader | common |
-| `latentdragon` | model, bottleneck, vq, latent, gan, objectives, tasks, training, eval, inference, io | all |
+| `latentdragon` | model, vq, domain, latent, gan, objectives, tasks, training, eval, inference, io | all |
 
-`model`, `vq` and `bottleneck` never import `training`. `checks/repo_rules.py` verifies
+`model` and `vq` never import `training`. `checks/repo_rules.py` verifies
 direction, file length, ASCII and in-function imports.
 
 ## Code conventions
@@ -24,7 +24,7 @@ direction, file length, ASCII and in-function imports.
 - No imports inside functions except try-guarded optional deps.
 - Python 3.13. `list`, `dict`, `X | None`, `match-case`. No `from __future__`. ASCII-only
   source and messages.
-- `black` and `ruff check` over `src checks scripts configs experiments`.
+- `black` and `ruff check` over `src checks scripts configs experiments examples`.
 - Sentence-case imperative commits; body gives the problem, then the change.
 - Public repository: no machine names, local paths, credentials or private dataset details
   in tracked files. Local notes in `CLAUDE.local.md`, plans in `plans/` (gitignored).
@@ -35,8 +35,10 @@ direction, file length, ASCII and in-function imports.
 `build(choice, REGISTRY)`. High-multiplicity code has no per-step mode branch; a branch the
 loop takes once per step is fine when it reads better.
 
-**The model is pure.** `Autoencoder` is encoder, bottleneck, trunk and head, each callable.
-It knows no loss. Objectives pair with heads.
+**The model is pure.** `Autoencoder` is domain, encoder, latent def, decoder and head; every
+value between them is a dict of named slots, and each part declares the slots it reads and
+writes. The framework reads parts only through `model/core/contracts.py` and the capabilities
+named there, never through a family's internals. It knows no loss; a head names its objective.
 
 **Tasks own losses; the engine owns stepping.** A task never steps an optimizer, a driver
 never computes a loss. Each network has its own `Bundle`.

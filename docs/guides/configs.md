@@ -12,6 +12,12 @@ Data is plain config: `TRAIN_SOURCES` is a list of sources, one per folder, and 
 is one source. `configs/ae/data/imagenet.py` names `data/imagenet/train` and `data/imagenet/val`;
 change the roots there or set both knobs in your own config.
 
-Architecture is `ARCH`, a dict of `AEArchConfig` fields written in the config; absent fields
-take their defaults. `configs/ae/arch/` holds the published layouts (`sdvae.py`,
-`fluxvae.py`, `latentmaid/{2222,0222,0022}.py`); a recipe pulls one in with `use_config` or writes its own `ARCH`.
+Architecture is `ARCH`: the parts `domain`, `encoder`, `latent`, `decoder` and `head`, each
+a registry choice with its own keyword arguments (see [model](../concepts/model.md)).
+`configs/ae/arch/` holds the published layouts (`sdvae.py`, `fluxvae.py`,
+`latentmaid/{2222,0222,0022}.py`); a recipe pulls one in with `use_config` or writes its own
+`ARCH`.
+
+`LOSS_CONFIGS` is a list of sensecraft terms for a single-slot domain, or a dict of them per data
+slot. `AUX_WEIGHTS` weighs the latent def's losses by name. `LR_SCALES` scales the learning rate
+of the `encoder`, `latent`, `decoder`, `head` and `critic` groups.
