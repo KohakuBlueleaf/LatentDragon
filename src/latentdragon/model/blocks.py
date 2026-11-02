@@ -6,6 +6,7 @@ from typing import Any
 import torch.nn as nn
 from torch import Tensor
 
+from latentdragon.model.compile import compile_wrapper
 from latentdragon.model.layers import RMSNorm, SwiGLU
 from latentdragon.model.temporal import CausalTemporalConv, SpatialDWConv
 from latentdragon_common.registry import Registry, build
@@ -19,7 +20,7 @@ def build_block(spec: Any, **site) -> nn.Module:
 
 
 class Block(nn.Module):
-    """Marks the modules `apply_recompute` and `apply_compile` act on.
+    """Marks the modules `apply_recompute` acts on.
 
     `spatial_reach` is the pixels one block reads on each side at its resolution, None
     when unknown. `temporal_reach` is the past frames it reads.
@@ -50,6 +51,7 @@ class BasicBlock(Block):
         self.mixer = nn.Conv2d(in_dim, in_dim, 3, 1, 1, groups=in_dim)
         self.swiglu = _channel_mlp(in_dim, mlp_dim, out_dim)
 
+    @compile_wrapper(scope="module")
     def forward(self, x: Tensor) -> Tensor:
         """Spatial mix, then channel MLP on channels-last, added to `x`."""
         mixed = self.mixer(self.norm(x)).transpose(1, -1)
@@ -80,6 +82,7 @@ class BasicResBlock(Block):
             nn.Conv2d(in_dim, out_dim, 1) if in_dim != out_dim else nn.Identity()
         )
 
+    @compile_wrapper(scope="module")
     def forward(self, x: Tensor) -> Tensor:
         """Two norm-act-conv rounds added to the (projected) input."""
         hidden = self.conv1(self.nonlin1(self.norm1(x)))
@@ -116,6 +119,7 @@ class BasicBlock3D(Block):
         # Channel MLP on channels-last, residual
         return x + self.swiglu(mixed.transpose(2, -1)).transpose(2, -1), cache
 
+    @compile_wrapper(scope="module")
     def forward(self, x: Tensor, has_keyframe: bool = True) -> Tensor:
         """The non-streaming pass: `stream` without a cache, output only."""
         return self.stream(x, has_keyframe)[0]

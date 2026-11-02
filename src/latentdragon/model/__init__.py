@@ -2,6 +2,12 @@
 
 from latentdragon.model.autoencoder import Autoencoder
 from latentdragon.model.blocks import BLOCK, Block, build_block
+from latentdragon.model.compile import (
+    allow_donated_buffers,
+    compile_parts,
+    compile_wrapper,
+    configure,
+)
 from latentdragon.model.encoders import (
     ENCODER,
     ConvEncoder,
@@ -10,7 +16,7 @@ from latentdragon.model.encoders import (
 )
 from latentdragon.model.heads import HEAD, RegressionHead
 from latentdragon.model.layers import NORM, AttnBlock, SwiGLU, resolve_norm
-from latentdragon.model.mechanics import apply_compile, apply_recompute
+from latentdragon.model.mechanics import apply_recompute
 from latentdragon.model.presets import (
     PRESETS,
     AEArchConfig,
@@ -44,10 +50,13 @@ __all__ = [
     "VideoEncoder",
     "VideoTrunk",
     # builders and functions
-    "apply_compile",
     "apply_recompute",
     "build_autoencoder",
     "build_block",
+    "allow_donated_buffers",
+    "compile_parts",
+    "compile_wrapper",
+    "configure",
     "get_preset",
     "resolve_norm",
 ]

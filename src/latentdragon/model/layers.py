@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from latentdragon.model.compile import compile_wrapper
 from latentdragon_common.registry import Registry
 
 NORM = Registry("norm")
@@ -25,6 +26,7 @@ class RMSNorm(nn.Module):
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim))
 
+    @compile_wrapper
     def forward(self, x):
         """Normalize with channels moved last, then moved back."""
         x = x.transpose(1, -1)
@@ -42,6 +44,7 @@ class LayerNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
         self.bias = nn.Parameter(torch.zeros(dim))
 
+    @compile_wrapper
     def forward(self, x):
         """Normalize with channels moved last, then moved back."""
         x = x.transpose(1, -1)
@@ -65,6 +68,7 @@ class SwiGLU(nn.Module):
         self.inp = nn.Linear(in_dim, mlp_dim * 2)
         self.out = nn.Linear(mlp_dim, out_dim)
 
+    @compile_wrapper
     def forward(self, x):
         """`silu(a) * gate` of the split input projection, then the output projection."""
         x, gate = self.inp(x).chunk(2, dim=-1)
