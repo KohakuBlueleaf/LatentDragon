@@ -96,7 +96,6 @@ def knobs_of(case: dict, folder: str, steps: int) -> dict:
     values = script_defaults()
     recipe = load_config_file(recipe_path(case["recipe"]))
     values.update(supplied_knobs(dict(recipe.globals_dict)))
-    frames = values.pop("FRAMES", 0)
     values.update(
         NAME="bench",
         RUN_ID="run",
@@ -110,10 +109,12 @@ def knobs_of(case: dict, folder: str, steps: int) -> dict:
         WANDB_PROJECT=None,
         FLUSH_EVERY=20,
     )
+    # Synthetic data: images of SIZE, unless the recipe's sources are synthetic already
     if case["data"] == "synthetic":
-        size = values["SIZE"]
-        shape = (frames, 3, size, size) if frames else (3, size, size)
-        values["TRAIN_SOURCES"] = [{"name": "synthetic", "shape": shape}]
+        given = values["TRAIN_SOURCES"]
+        if not given or any(s.get("name") != "synthetic" for s in given):
+            size = values["SIZE"]
+            values["TRAIN_SOURCES"] = [{"name": "synthetic", "shape": (3, size, size)}]
         values["NUM_WORKERS"] = 0
     elif REAL_SOURCES is not None:
         values["TRAIN_SOURCES"] = REAL_SOURCES

@@ -38,7 +38,6 @@ def knobs_of() -> dict:
     values = supplied_knobs(dict(load_config_file(SCRIPT).globals_dict))
     path = ROOT / "configs" / f"{RECIPE}.py"
     values.update(supplied_knobs(dict(load_config_file(path).globals_dict)))
-    values.pop("FRAMES", None)
     return {**values, "EPOCHS": 0, "MAX_STEPS": 100, **KNOBS}
 
 
