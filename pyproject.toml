@@ -20,7 +20,7 @@ dependencies = [
     "kohaku-engine>=0.5",
     "anyschedule",
     "optimfactory",
-    "sensecraft[full]",
+    "sensecraft[dinov3]>=0.4",
 ]
 
 [project.optional-dependencies]

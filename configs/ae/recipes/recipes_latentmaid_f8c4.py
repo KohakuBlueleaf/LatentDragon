@@ -4,7 +4,7 @@ kogine run scripts/train/ae.py --config configs/ae/recipes/recipes_latentmaid_f8
 """
 
 from kohakuengine import use_config
-from sensecraft.loss import GeneralConfig, LPIPSConfig
+from sensecraft import Term
 
 use_config("../data/data_imagenet.py")
 use_config("../precision/precision_fp16.py")
@@ -18,8 +18,8 @@ NUM_WORKERS = 16
 
 # Reconstruction losses, auxiliary weights and the adversarial setup
 LOSS_CONFIGS = [
-    GeneralConfig("mse", weight=1.0),
-    LPIPSConfig(net="vgg", weight=0.5),
+    Term("mse"),
+    Term("lpips", 0.5, net="vgg"),
 ]
 AUX_WEIGHTS = {"vq": 1.0, "kl": 0.0}
 GAN_SCHEME = {

@@ -5,7 +5,7 @@ kogine run scripts/train/ae.py --config configs/ae/recipes/recipes_kvq_f16c256_p
 """
 
 from kohakuengine import use_config
-from sensecraft.loss import DinoV3LossConfig, GeneralConfig, LPIPSConfig
+from sensecraft import Term
 
 use_config("../data/data_multi.py")
 use_config("../precision/precision_fp16.py")
@@ -19,9 +19,9 @@ NUM_WORKERS = 16
 
 # Reconstruction losses, auxiliary weights and the adversarial setup
 LOSS_CONFIGS = [
-    GeneralConfig("mse", weight=1.0),
-    LPIPSConfig(net="vgg", weight=0.5),
-    DinoV3LossConfig(model_type="base", use_gram=False, weight=250),
+    Term("mse"),
+    Term("lpips", 0.5, net="vgg"),
+    Term("dino_vit", 250, model="base", use_gram=False),
 ]
 AUX_WEIGHTS = {"vq": 1.0, "kl": 0.0}
 GAN_SCHEME = {

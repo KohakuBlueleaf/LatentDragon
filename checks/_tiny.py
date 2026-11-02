@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from sensecraft.loss import GeneralConfig
+from sensecraft import Term
 
 from latentdragon.training.entry import run
 from latentdragon_common.knobs import supplied_knobs
@@ -52,7 +52,7 @@ def knobs(folder: Path, **changes) -> dict:
         SIZE=16,
         NUM_WORKERS=0,
         ARCH_OVERRIDES=TINY_ARCH,
-        LOSS_CONFIGS=[GeneralConfig("mse", weight=1.0)],
+        LOSS_CONFIGS=[Term("mse")],
         BATCH_SIZE=2,
         MAX_STEPS=2,
         PRECISION="fp32",

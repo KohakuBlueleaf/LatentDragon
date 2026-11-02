@@ -22,6 +22,8 @@ STAND_IN_HUB = Path(
 ).resolve()  # a random DINOv3 ViT-B, for timing only
 os.environ["HF_HOME"] = str(STAND_IN_HUB)
 os.environ["HF_HUB_OFFLINE"] = "1"
+# Converted stand-in weights stay beside the stand-in hub, never in the user cache
+os.environ["SENSECRAFT_CACHE"] = str(STAND_IN_HUB / "sensecraft")
 
 import torch  # noqa: E402
 from kohakuengine import load_config_file  # noqa: E402

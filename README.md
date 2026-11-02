@@ -207,7 +207,7 @@ Every knob problem is reported together, before any GPU work:
 
 **What a run does.**
 
-- Loss: MSE and perceptual terms (`LOSS_CONFIGS`) on the reconstruction, plus the bottleneck loss.
+- Loss: sensecraft terms (`LOSS_CONFIGS`, a list of `sensecraft.Term`) on the reconstruction, plus the bottleneck loss.
 - GAN: `taming` (hinge, with the batch-level adaptive weight at the head's last layer), `r3gan` or
   `stylegan2`, with a PatchGAN critic. It starts at `disc_start`.
 - Recipes train in fp16 with fp32 weights and a loss scaler per network. `bf16`, `fp32`, `bf16-true` and `fp16-true` are also available; the last two hold 16-bit weights and need `OPTIMIZER=adam16`.

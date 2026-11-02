@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 import torch
 from sensecraft.metrics import psnr, ssim
 
-from latentdragon.gan import GanCtx, GanMicro, GanScheme, seed_of
+from latentdragon.gan import GanCtx, GanMicro, GanScheme
 from latentdragon.latent import LatentCtx
 from latentdragon.tasks.base import TASK, Task
 from latentdragon.tasks.freeze import apply_freeze
@@ -175,8 +175,7 @@ class AutoencoderTask(Task):
     def _seeded_fake(self, x, z, scale: float) -> tuple:
         """Decode `z`; returns `(fake, d nll / d fake, nll, term logs)`."""
         fake = self._render(self._decode(z)).float()
-        nll, terms = self.objective(x, fake)
-        seed = seed_of(nll, fake, scale)
+        seed, nll, terms = self.objective.seeded(x, fake, scale)
         return fake, seed, nll, terms
 
     def _teacher_features(self, x) -> dict:
