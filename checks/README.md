@@ -9,6 +9,8 @@ models and stop at the first failure.
 | `python checks/resume.py` | checkpoint, resume, RNG or loader state, driver step order, EMA | a crashed run ends identical to an uninterrupted one; a changed knob is refused on resume; a failed save keeps the last good checkpoint |
 | `python checks/load.py` | presets, state dict keys, converters, exports | every preset builds; native, legacy and diffusers files rebuild the same model |
 | `python checks/config.py` | knobs, config validation, recipes | every recipe is valid; bad knobs are reported together before device work |
+| `python checks/reducer.py` | reducer, bundle, backward order | two ranks through each reducer give the gradients of one rank on the whole batch |
+| `python checks/scaler.py` | loss scaler, checkpoint contents | a save leaves the scaler untouched on the saving rank; a pending overflow survives a resume |
 | `python checks/repo_rules.py` | package imports, or anything before a PR | file length, ASCII, in-function imports, import direction |
 
 A change that touches none of this needs none of them; adding a module does not affect resume.

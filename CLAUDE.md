@@ -9,7 +9,7 @@ KohakUwULLM and KohakuMoss; same house conventions.
 | package | role | imports |
 | --- | --- | --- |
 | `latentdragon_common` | registry, build, imports, log, knobs, null callables | no torch, no sibling |
-| `latentdragon_kernels` | ops, registry, eager and Triton backends, tuning, error stats | common |
+| `latentdragon_kernels` | ops, registry, eager, gemm and Triton backends, tuning, error stats | common |
 | `latentdragon_data` | sources, epoch-resumable loader | common |
 | `latentdragon` | model, bottleneck, vq, latent, gan, objectives, tasks, training, eval, inference, io | all |
 

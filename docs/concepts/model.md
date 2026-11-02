@@ -97,8 +97,10 @@ The temporal conv is a full `(C, C, 3)` Conv1d, not depthwise.
 
 `apply_recompute(model)` replaces `block.forward` with a non-reentrant checkpoint of the
 original, so no block has a checkpoint branch and state dict keys stay as they are. Attention
-blocks stay outside it, as before. `apply_compile(model)` calls `module.compile()` on blocks
-and attention blocks, which does not add an `_orig_mod` prefix. Calling compile on the whole
-model does add it.
+blocks stay outside it, as before.
 
-Using both on one model has not been measured.
+`COMPILE` sets the compile scope: `off`, `function` (norms and activations), `module` (blocks)
+or `model` (encoder, trunk and head as one graph each). `compile_wrapper` marks a function or
+block; `compile_parts` compiles whole parts. A wrapped function runs inline under an enclosing
+compile, so the scopes do not conflict. A checkpointed block is compiled as one recompute
+graph, and no scope adds an `_orig_mod` prefix to state dict keys.

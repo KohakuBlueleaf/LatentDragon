@@ -132,18 +132,20 @@ z_q, info = vq(z)    # z: (..., 256), channels last
 
 ### Kernels
 
-`latentdragon_kernels` holds the VQ hot path as Triton kernels, each with an eager PyTorch reference:
+`latentdragon_kernels` holds the VQ hot path and the 16-bit optimizer, each op with an eager
+PyTorch reference:
 
-| Op | What the kernel does |
+| Op | What it does |
 | --- | --- |
-| `quantize` | nearest-code search and gather in one pass; the kernel tiles over the codebook and keeps a running minimum (its distance dots run in tf32 for fp32 input) |
+| `quantize` | nearest-code search and gather in one Triton pass; the kernel tiles over the codebook and keeps a running minimum (its distance dots run in tf32 for fp32 input) |
 | `nearest` | the same search without gradients, for the inverse VQ loss |
-| `mlp_project` | the two-layer projector forward and backward; the `(G, N, h)` hidden tensor stays in registers and the backward recomputes it |
+| `mlp_project` | the two-layer projector forward and backward; the `gemm` backend computes it on `bmm` in hidden chunks, so no `(G, N, h)` hidden tensor is held between forward and backward |
+| `adam16` | Adam with 16-bit state and fp32 registers, the second moment stored as its root, and stochastic rounding on writeback |
 
-At `G = 32`, `N = 65536`, `h = 256` that hidden tensor is 1 GiB in fp16. The kernel is picked once
-when the model is built (`resolve`), by device and architecture; Triton needs sm80 or newer, and
-everything else runs the eager path. Block sizes are timed per card and stored in a table. Precision
-and throughput are measured by the scripts in `experiments/`.
+An op is picked once when the model is built (`resolve`), by device and card family. `gemm` serves
+sm120 and the Triton kernels sm80 or newer; everything else runs the eager path. Block sizes are
+timed per card and stored in a table. Precision and throughput are in
+[`docs/performance`](docs/performance/README.md).
 
 ## Install
 
@@ -208,7 +210,7 @@ Every knob problem is reported together, before any GPU work:
 - Loss: MSE and perceptual terms (`LOSS_CONFIGS`) on the reconstruction, plus the bottleneck loss.
 - GAN: `taming` (hinge, with the batch-level adaptive weight at the head's last layer), `r3gan` or
   `stylegan2`, with a PatchGAN critic. It starts at `disc_start`.
-- bf16 by default. `PRECISION=fp16` uses a loss scaler per network.
+- Recipes train in fp16 with fp32 weights and a loss scaler per network. `bf16`, `fp32`, `bf16-true` and `fp16-true` are also available; the last two hold 16-bit weights and need `OPTIMIZER=adam16`.
 - Weight EMA, used for validation and export. Validation reports rFID, PSNR, SSIM and, for VQ,
   code usage and perplexity.
 - Each network has its own optimizer, schedule, gradient scaler and clipping; the gradient is
