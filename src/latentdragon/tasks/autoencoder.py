@@ -105,9 +105,6 @@ class AutoencoderTask(Task):
         encoded.latent = detached(encoded.latent)
         return encoded
 
-    def _encode(self, x: dict, offset: int):
-        return self._serialize(self._encoder(x), offset)
-
     def _render_with_pixels(self, features):
         """Head call that also receives the source pixels."""
         return self.model.head(features, self.parts.pixel_source(features))
@@ -195,7 +192,8 @@ class AutoencoderTask(Task):
 
     def _seeded_fake(self, x, latent, scale: float) -> tuple:
         """Decode `latent`; returns `(fake, d nll / d fake, nll, term logs)`."""
-        fake = tree.map_tensors(lambda t: t.float(), self._render(self._decode(latent)))
+        self._output_latent = self._decode(latent)
+        fake = tree.map_tensors(lambda t: t.float(), self._render(self._output_latent))
         seed, nll, terms = self.objective.seeded(x, fake, scale)
         return fake, seed, nll, terms
 
@@ -222,14 +220,17 @@ class AutoencoderTask(Task):
         # Encode and decode the main view
         with ctx.timer.phase("encode"):
             offset = ctx.step + ctx.micro_index * tree.batch_size(x)
-            encoded = self._encode(x, offset)
+            hidden = self._encoder(x)
+            encoded = self._serialize(hidden, offset)
         with ctx.timer.phase("decode"):
             fake, seed, nll, terms = self._seeded_fake(
                 x, encoded.latent, ctx.seed_scale
             )
+            output_latent = self._output_latent
 
-        # Latent terms and the latent losses they join
-        latent = LatentCtx(x, encoded, ctx.step, fake=fake, seed=seed)
+        # Latent terms, which read the slot-boundary states, and the latent losses they join
+        states = {"encoder": hidden, "latent": encoded.latent, "decoder": output_latent}
+        latent = LatentCtx(x, encoded, ctx.step, fake=fake, seed=seed, states=states)
         if self.terms:
             latent.teacher = self._teacher_features(x)
         term_aux, term_logs = self._term_aux(latent) if self.terms else ([], {})
@@ -253,6 +254,9 @@ class AutoencoderTask(Task):
         metrics.update(term_logs)
         metrics.update(self._usage(encoded, ctx))
         metrics.update(self._quality(x, fake, encoded, ctx.step, ctx.micro_index))
+        if ctx.micro_index == 0 and ctx.step % self._metric_every == 0:
+            metrics.update(magnitude_stats("encoder_output", hidden))
+            metrics.update(magnitude_stats("output_latent", output_latent))
         return metrics
 
     def _run_views(self, x, latent, ctx, micros: list) -> None:
@@ -375,6 +379,18 @@ class AutoencoderTask(Task):
         if variant is not None:
             latent = self.model.latent.variant(latent, variant)
         return self.model.head(self.model.decode(latent)), encoded
+
+
+def magnitude_stats(section: str, slots: dict) -> dict:
+    """Mean, std and largest magnitude of every float tensor of `slots`, under `section`."""
+    out = {}
+    for path, value in tree.named_tensors(slots).items():
+        if value.is_floating_point():
+            value = value.detach().float()
+            out[f"{section}/{path}_mean"] = value.mean()
+            out[f"{section}/{path}_std"] = value.std()
+            out[f"{section}/{path}_absmax"] = value.abs().amax()
+    return out
 
 
 def latent_stats(raw: dict) -> dict:

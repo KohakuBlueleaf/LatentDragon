@@ -17,6 +17,11 @@ class LatentTerm(torch.nn.Module):
     teacher: str | None = None
     group = "model"
 
+    @classmethod
+    def parts_of(cls, spec: dict) -> tuple[str, ...]:
+        """The model parts a term built from `spec` trains; `requires` unless overridden."""
+        return cls.requires
+
     def forward(self, ctx: LatentCtx) -> tuple:
         """Compute `(loss, logs)` from the context; subclasses implement it."""
         raise NotImplementedError

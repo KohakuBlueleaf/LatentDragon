@@ -159,7 +159,8 @@ def latent_problems(k: dict, model) -> list[str]:
             problems += issue
             continue
         term = LATENT_TERM.get(spec_name(spec["term"]))
-        for part in term.requires:
+        kwargs = spec["term"] if isinstance(spec["term"], dict) else {}
+        for part in term.parts_of(kwargs):
             if _frozen(k, part):
                 problems.append(
                     f"term {spec_name(spec['term'])} needs {part}, which FREEZE holds"

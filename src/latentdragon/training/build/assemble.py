@@ -45,9 +45,9 @@ WIRE_DTYPES = {None: None, "bf16": torch.bfloat16, "fp16": torch.float16}
 
 
 def _terms(k: dict) -> list:
-    """`(term, weighting)` pairs for every `LATENT_TERMS` entry."""
+    """`(term, weighting)` pairs for every `LATENT_TERMS` entry; no weight means fixed 1."""
     return [
-        (build(spec["term"], LATENT_TERM), build(spec.get("weight"), WEIGHTING))
+        (build(spec["term"], LATENT_TERM), build(spec.get("weight", "fixed"), WEIGHTING))
         for spec in k["LATENT_TERMS"]
     ]
 

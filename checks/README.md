@@ -12,6 +12,7 @@ models and stop at the first failure.
 | `python checks/reducer.py` | reducer, bundle, backward order | two ranks through each reducer give the gradients of one rank on the whole batch |
 | `python checks/scaler.py` | loss scaler, checkpoint contents | the scaler backs off, grows and caps on the device, and a resume continues its count |
 | `python checks/examples.py` | the slot contract, task, objective, latent defs | the paired video/audio and the keyframe/motion toys train, and a stored packed latent decodes like the live one |
+| `python checks/state_terms.py` | latent terms, task states, conv head, sample callback | the state RMS term matches a direct computation and trains; an fp32 head skips the 16-bit cast; each sample step writes a train-batch and a fixed-batch grid |
 | `python checks/repo_rules.py` | package imports, or anything before a PR | file length, ASCII, in-function imports, import direction |
 
 A change that touches none of this needs none of them; adding a module does not affect resume.
