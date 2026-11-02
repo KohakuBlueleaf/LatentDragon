@@ -11,6 +11,7 @@ models and stop at the first failure.
 | `python checks/config.py` | knobs, config validation, recipes | every recipe is valid; bad knobs are reported together before device work |
 | `python checks/reducer.py` | reducer, bundle, backward order | two ranks through each reducer give the gradients of one rank on the whole batch |
 | `python checks/scaler.py` | loss scaler, checkpoint contents | the scaler backs off, grows and caps on the device, and a resume continues its count |
+| `python checks/examples.py` | the slot contract, task, objective, latent defs | the paired video/audio and the keyframe/motion toys train, and a stored packed latent decodes like the live one |
 | `python checks/repo_rules.py` | package imports, or anything before a PR | file length, ASCII, in-function imports, import direction |
 
 A change that touches none of this needs none of them; adding a module does not affect resume.
