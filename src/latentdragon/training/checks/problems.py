@@ -1,12 +1,15 @@
-"""Knob validation: every area returns `list[str]`; nothing here needs a GPU."""
+"""Knob validation: every area returns `list[str]`; nothing here needs a GPU.
+
+Areas that depend on the model take it built on the meta device and ask its parts for the
+capabilities they declare, never for registry names.
+"""
 
 from pathlib import Path
 
 from latentdragon.gan import CRITIC, GAN_SCHEME
 from latentdragon.latent import LATENT_TERM, LATENT_VIEW
-from latentdragon.model import HEAD
-from latentdragon.model.compile import SCOPES
-from latentdragon.objectives import HEAD_OBJECTIVES, OBJECTIVE
+from latentdragon.model.runtime.compile import SCOPES
+from latentdragon.objectives import OBJECTIVE
 from latentdragon.training.checkpoint import latest
 from latentdragon.training.precision import PRECISION
 from latentdragon_common.registry import Registry, build
@@ -82,8 +85,8 @@ def component_problems(k: dict) -> list[str]:
     return problems
 
 
-def gan_problems(k: dict) -> list[str]:
-    """Scheme-specific problems and scheme/critic/freeze mismatches."""
+def gan_problems(k: dict, model) -> list[str]:
+    """Scheme-specific problems and scheme/critic/freeze/head mismatches."""
     if spec_name(k["GAN_SCHEME"]) not in GAN_SCHEME:
         return []
     scheme = build(k["GAN_SCHEME"], GAN_SCHEME)
@@ -94,6 +97,11 @@ def gan_problems(k: dict) -> list[str]:
         problems.append("CRITIC is set but GAN_SCHEME uses no critic")
     if scheme.uses_critic and _frozen(k, "head"):
         problems.append("a GAN scheme needs a trainable head; FREEZE holds it")
+    if scheme.needs_anchor and not hasattr(model.head, "last_layer"):
+        problems.append(
+            f"GAN_SCHEME {scheme.name} weighs at the head's last_layer, which "
+            f"{type(model.head).__name__} does not declare"
+        )
     return problems
 
 
@@ -101,31 +109,22 @@ def _frozen(k: dict, part: str) -> bool:
     return any(p == part for p in k["FREEZE"])
 
 
-def head_problems(k: dict) -> list[str]:
-    """Unknown head, head/objective pairing and pixel-input requirements."""
-    head = spec_name(k["HEAD"])
-    paired = HEAD_OBJECTIVES.get(head)
+def head_problems(k: dict, model) -> list[str]:
+    """Head/objective pairing and pixel-input requirements."""
+    head = type(model.head).__name__
+    paired = getattr(model.head, "objective", None)
     objective = spec_name(k["OBJECTIVE"])
-    problems = registry_problem("HEAD", k["HEAD"], HEAD)
-    if problems:
-        return problems
+    problems = []
+    if paired is None and objective is None:
+        problems.append(f"{head} pairs with no objective; set OBJECTIVE")
     if paired is not None and objective is not None and objective != paired:
-        problems.append(f"HEAD {head} pairs with OBJECTIVE {paired}, not {objective}")
-    if head is not None and HEAD.get(head).needs_pixels:
-        problems.append(f"HEAD {head} needs pixels, and no pixel source is configured")
+        problems.append(f"{head} pairs with OBJECTIVE {paired}, not {objective}")
+    if getattr(model.head, "needs_pixels", False):
+        problems.append(f"{head} needs pixels, and no pixel source is configured")
     return problems
 
 
-def _quantized(spec) -> bool:
-    """True when the bottleneck, or the one a nested bottleneck wraps, is vq."""
-    match spec:
-        case {"name": "nested", "inner": inner}:
-            return _quantized(inner)
-        case _:
-            return spec_name(spec) == "vq"
-
-
-def latent_problems(k: dict) -> list[str]:
+def latent_problems(k: dict, model) -> list[str]:
     """Latent views and terms against domain, codebook, freeze and teacher knobs."""
     problems = []
     if k["PRECISION"] in SCALED:
@@ -135,7 +134,8 @@ def latent_problems(k: dict) -> list[str]:
                 problems.append(f"term {name} needs the model group under fp16")
 
     # Views: domain fit, codebook safety and freeze compatibility.
-    quantized = _quantized(k["BOTTLENECK"])
+    quantized = getattr(model.latent, "codebook_size", 0) > 0
+    domain = model.domain.name
     for spec in k["LATENT_VIEWS"]:
         issue = registry_problem("LATENT_VIEWS", spec, LATENT_VIEW)
         if issue:
@@ -143,14 +143,14 @@ def latent_problems(k: dict) -> list[str]:
             continue
         view = LATENT_VIEW.get(spec_name(spec))
         name = spec_name(spec)
-        if k["DOMAIN"] not in view.domains:
-            problems.append(f"view {name} does not apply to {k['DOMAIN']}")
+        if domain not in view.domains:
+            problems.append(f"view {name} does not apply to {domain}")
         if quantized and not view.codebook_safe and not k["ALLOW_OFF_CODEBOOK"]:
             problems.append(
                 f"view {name} leaves the codebook; set ALLOW_OFF_CODEBOOK to accept it"
             )
-        if _frozen(k, "trunk") and _frozen(k, "head"):
-            problems.append(f"view {name} cannot act with trunk and head frozen")
+        if _frozen(k, "decoder") and _frozen(k, "head"):
+            problems.append(f"view {name} cannot act with decoder and head frozen")
 
     # Terms: required parts must be trainable and required teachers present.
     for spec in k["LATENT_TERMS"]:
@@ -197,13 +197,15 @@ def compile_problems(k: dict) -> list[str]:
     return problems
 
 
-def compile_notes(k: dict) -> list[str]:
+def compile_notes(k: dict, model) -> list[str]:
     """Settings that run but cannot help, so a run starts knowing what it paid for."""
     notes = []
-    if k["COMPILE"] == "function" and spec_name(k["TRUNK"]) == "conv":
+    if k["COMPILE"] == "function" and getattr(
+        model.decoder, "function_scope_gaps", False
+    ):
         notes.append(
-            "COMPILE function covers norms and SwiGLU only, which leaves a conv trunk's "
-            "convolutions eager; use module or model"
+            f"COMPILE function covers norms and SwiGLU only, which leaves "
+            f"{type(model.decoder).__name__}'s convolutions eager; use module or model"
         )
     if k["COMPILE_LOSS"] and k["COMPILE"] == "off":
         notes.append(
@@ -216,7 +218,7 @@ def compile_notes(k: dict) -> list[str]:
         )
     if k["COMPILE_LOSS"] and not k["LOSS_CONFIGS"]:
         notes.append("COMPILE_LOSS has no loss network to compile")
-    if k["COMPILE"] in ("module", "model") and k["DOMAIN"] == "video":
+    if k["COMPILE"] in ("module", "model") and model.domain.name == "video":
         notes.append(
             "video chunks change shape; set COMPILE_DYNAMIC if clip length varies"
         )
@@ -228,15 +230,15 @@ def data_problems(k: dict) -> list[str]:
     return [] if k["TRAIN_SOURCES"] else ["TRAIN_SOURCES is empty"]
 
 
-def all_problems(k: dict) -> list[str]:
-    """Every problem of every area."""
+def all_problems(k: dict, model) -> list[str]:
+    """Every problem of every area; `model` is the arch built on the meta device."""
     return [
         *step_problems(k),
         *component_problems(k),
         *precision_problems(k),
-        *gan_problems(k),
-        *head_problems(k),
-        *latent_problems(k),
+        *gan_problems(k, model),
+        *head_problems(k, model),
+        *latent_problems(k, model),
         *stage_problems(k),
         *compile_problems(k),
         *data_problems(k),

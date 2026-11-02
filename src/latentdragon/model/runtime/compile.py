@@ -5,10 +5,10 @@
 | `off` | nothing |
 | `function` | each layer forward: norms, SwiGLU, attention |
 | `module` | each block forward, its layers inlined |
-| `model` | encoder, trunk and head whole, every block inlined |
+| `model` | encoder, decoder and head whole, every block inlined |
 
 The scopes never conflict: a decorated forward reached inside a compiled graph runs as plain
-Python and inlines. The bottleneck stays out, because its kernels launch Triton.
+Python and inlines. The latent def stays out, because its kernels launch Triton.
 """
 
 import functools

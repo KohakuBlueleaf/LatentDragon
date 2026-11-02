@@ -12,38 +12,79 @@ import json
 import torch
 
 from latentdragon.inference import decode, stream_encode
-from latentdragon.io.arch_json import arch_from_json
-from latentdragon.model import AEArchConfig, build_autoencoder
+from latentdragon.model import build_autoencoder
 
 # Small untrained layouts; strategy error does not depend on width
 VIDEO = {
     "domain": "video",
-    "encoder": "video",
-    "trunk": "video",
-    "encoder_norm": "rms",
-    "trunk_norm": "rms",
-    "latent_dim": 4,
-    "encoder_blocks": ((2, 2, 16, 16, 1), (2, 2, 16, 16, 1)),
-    "trunk_blocks": ((1, 2, 16, 16, 2), (2, 2, 32, 32, 2), (2, 1, 32, 32, 2)),
+    "encoder": {
+        "name": "latentmaid_video",
+        "in_channels": 3,
+        "out_channels": 4,
+        "stages": [[2, 2, 16, 16, 1], [2, 2, 16, 16, 1]],
+        "norm": "rms",
+    },
+    "latent": "identity",
+    "decoder": {
+        "name": "latentmaid_video",
+        "in_channels": 4,
+        "stages": [[1, 2, 16, 16, 2], [2, 2, 32, 32, 2], [2, 1, 32, 32, 2]],
+        "norm": "rms",
+    },
+    "head": {
+        "name": "conv",
+        "in_channels": 4,
+        "out_channels": 3,
+        "kernel_size": 1,
+        "video": True,
+    },
 }
-IMAGE_ENCODER = ((2, 16, 16, 1), (2, 16, 16, 1), (2, 16, 16, 1))
 CONV_IMAGE = {
-    "encoder": "mlp",
-    "trunk": "conv",
-    "encoder_norm": "rms",
-    "trunk_norm": "rms",
-    "latent_dim": 4,
-    "encoder_blocks": IMAGE_ENCODER,
-    "trunk_blocks": ((2, 32, 1), (2, 32, 1), (2, 16, 1)),
+    "domain": "image",
+    "encoder": {
+        "name": "latentmaid",
+        "in_channels": 3,
+        "out_channels": 4,
+        "stages": [[2, 16, 16, 1], [2, 16, 16, 1], [2, 16, 16, 1]],
+        "norm": "rms",
+        "attn": None,
+    },
+    "latent": "identity",
+    "decoder": {
+        "name": "sdvae",
+        "in_channels": 4,
+        "stages": [[2, 32, 1], [2, 32, 1], [2, 16, 1]],
+        "norm": "rms",
+        "attn": None,
+    },
+    "head": {
+        "name": "conv",
+        "in_channels": 16,
+        "out_channels": 3,
+        "kernel_size": 3,
+        "norm": "rms",
+        "act": "mish",
+    },
 }
 MLP_IMAGE = {
-    "encoder": "mlp",
-    "encoder_norm": "rms",
-    "trunk_norm": "rms",
-    "latent_dim": 4,
-    "encoder_blocks": IMAGE_ENCODER,
-    "trunk": "mlp",
-    "trunk_blocks": ((2, 16, 16, 2), (2, 32, 32, 2), (2, 32, 32, 2)),
+    "domain": "image",
+    "encoder": {
+        "name": "latentmaid",
+        "in_channels": 3,
+        "out_channels": 4,
+        "stages": [[2, 16, 16, 1], [2, 16, 16, 1], [2, 16, 16, 1]],
+        "norm": "rms",
+        "attn": None,
+    },
+    "latent": "identity",
+    "decoder": {
+        "name": "latentmaid",
+        "in_channels": 4,
+        "stages": [[2, 16, 16, 2], [2, 32, 32, 2], [2, 32, 32, 2]],
+        "norm": "rms",
+        "attn": None,
+    },
+    "head": {"name": "conv", "in_channels": 4, "out_channels": 3, "kernel_size": 1},
 }
 VIDEO_CASES = [
     {"name": "tiled", "tile": [96, 96]},
@@ -69,16 +110,16 @@ MLP_IMAGE_CASES = [
 ]
 
 
-def arch_of(fields: dict) -> AEArchConfig:
-    """An arch from `fields`; absent fields take their defaults."""
-    return arch_from_json(fields)
+def decoded(model, z: torch.Tensor, case="full") -> torch.Tensor:
+    """The output tensor of decoding the decoder input `z` with `case`."""
+    return decode(model, {"z": z}, case)["x"]
 
 
 def tiled_output(model, z: torch.Tensor, case) -> tuple[torch.Tensor, int]:
-    """Decode with `case` and count the head calls, one per tile or chunk."""
+    """Decode with `case` and count the head projections, one per tile or chunk."""
     calls = []
-    hook = model.head.register_forward_hook(lambda *_: calls.append(1))
-    output = decode(model, z, case)
+    hook = model.head.last_layer.register_forward_hook(lambda *_: calls.append(1))
+    output = decoded(model, z, case)
     hook.remove()
     return output, len(calls)
 
@@ -99,16 +140,16 @@ def report(label, value, reference, case, calls: int = 1) -> None:
 def main() -> None:
     torch.manual_seed(0)
 
-    video = build_autoencoder(arch_of(VIDEO)).eval()
+    video = build_autoencoder(VIDEO).eval()
     print(json.dumps({"video_reach": str(video.reach())}))
     z = torch.randn(1, 4, 9, 40, 40)
-    full = decode(video, z)
+    full = decoded(video, z)
     for case in VIDEO_CASES:
         output, calls = tiled_output(video, z, case)
         report("video", output, full, case, calls)
 
     clip = torch.randn(1, 17, 3, 32, 32)
-    whole = video.encoder(clip)
+    whole = video.encoder.tensor(clip)
     chunks = list(stream_encode(video, clip))
     report("video_encoder", torch.cat(chunks, dim=2), whole, "stream_encode")
 
@@ -118,9 +159,9 @@ def main() -> None:
         ("mlp_image", MLP_IMAGE, MLP_IMAGE_CASES),
     )
     for label, arch, cases in images:
-        image = build_autoencoder(arch_of(arch)).eval()
+        image = build_autoencoder(arch).eval()
         print(json.dumps({f"{label}_reach": str(image.reach())}))
-        full = decode(image, z)
+        full = decoded(image, z)
         for case in cases:
             output, calls = tiled_output(image, z, case)
             report(label, output, full, case, calls)

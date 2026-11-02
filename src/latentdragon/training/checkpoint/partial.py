@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 from safetensors.torch import load_file
 
+from latentdragon.io.state_keys import upgrade_keys
 from latentdragon_common.log import get_logger
 
 log = get_logger(__name__)
@@ -14,7 +15,7 @@ def checkpoint_weights(path: str | Path, use_ema: bool = True) -> dict:
     """Model tensors of a safetensors file or checkpoint folder, EMA laid on top."""
     path = Path(path)
     if not path.is_dir():
-        return load_file(str(path))
+        return upgrade_keys(load_file(str(path)))
     tensors = {
         k.removeprefix("model."): v
         for k, v in load_file(str(path / "trainable.safetensors")).items()
@@ -23,7 +24,7 @@ def checkpoint_weights(path: str | Path, use_ema: bool = True) -> dict:
     ema = path / "ema.safetensors"
     if use_ema and ema.exists():
         tensors.update(load_file(str(ema)))
-    return tensors
+    return upgrade_keys(tensors)
 
 
 def split_for_module(

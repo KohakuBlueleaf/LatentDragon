@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 
 from latentdragon.domain.latents import pca_rgb
+from latentdragon.model.core import tree
 from latentdragon.training.callbacks.runner import Callback
 
 
@@ -33,8 +34,9 @@ class ValidationCallback(Callback):
 class SampleCallback(Callback):
     """Writes a sample grid of a held batch to `samples/<step>.webp` and publishes it.
 
-    Rows: the real images, the latent before quantization as RGB, the reconstruction, then one
-    reconstruction per nested latent level when the bottleneck has them.
+    Rows come from the domain's `to_grid`: the real samples, the first latent tensor of the
+    latent def's continuous view as RGB, the reconstruction, then one reconstruction per eval
+    variant of the latent def below the full latent. A domain without a grid draws none.
     """
 
     KEY = "train/samples"
@@ -50,27 +52,36 @@ class SampleCallback(Callback):
     @torch.no_grad()
     def on_step_end(self, state) -> None:
         """Reconstruct the held batch, save the grid and send it to the image sinks."""
+        domain = self.task.model.domain
+        if domain.to_grid is None:
+            return
+        latent_def = self.task.model.latent
         self.task.eval()
         with self.autocast():
-            recon, out = self.task.reconstruct(self.batch)
-            levels = self.task.model.bottleneck.eval_masks()
-            full = out.z.shape[1]
-            nested = [
-                self.task.reconstruct(self.batch, keep)[0]
-                for keep in levels
-                if keep < full
+            recon, encoded = self.task.reconstruct(self.batch)
+            variants = latent_def.eval_variants()
+            partial = [
+                self.task.reconstruct(self.batch, key)[0] for key in variants[:-1]
             ]
         self.task.train()
 
-        latents = out.raw if out.raw is not None else out.z
-        fakes = [fake.float() for fake in (recon, *nested)]
-        domain = self.task.model.domain
-        grid = domain.to_grid(self.batch.float(), fakes, pca_rgb(latents))
+        fakes = [
+            tree.map_tensors(lambda t: t.float(), fake) for fake in (recon, *partial)
+        ]
+        grid = domain.to_grid(self.batch, fakes, preview(latent_def.raw(encoded)))
 
         self.out_dir.mkdir(parents=True, exist_ok=True)
         path = self.out_dir / f"{state.step}.webp"
         domain.save_grid(grid, path)
         self.publish(state.step, self.KEY, path)
+
+
+def preview(raw: dict) -> torch.Tensor | None:
+    """The first float latent tensor with channels at dim 1 and spatial dims, as RGB."""
+    for value in tree.named_tensors(raw).values():
+        if value.is_floating_point() and value.ndim >= 4:
+            return pca_rgb(value)
+    return None
 
 
 class CheckpointCallback(Callback):

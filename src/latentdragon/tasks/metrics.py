@@ -36,7 +36,7 @@ class ScalarEma:
 
 
 class NoUsage:
-    """Usage window of a bottleneck with no codes."""
+    """Usage window of a latent def with no codes."""
 
     def mark(self, indices) -> None:
         return None
@@ -64,4 +64,4 @@ class CodeUsage:
         self.counts.sub_(stride).clamp_(min=0.0)
         self.counts.masked_fill_(self.used > 0, self.window)
         self.used.zero_()
-        return {"vq/usage_ema": (self.counts > 0).float().mean()}
+        return {"vq/usage_window": (self.counts > 0).float().mean()}

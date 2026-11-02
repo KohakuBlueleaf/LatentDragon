@@ -17,9 +17,8 @@ import torch.nn.functional as F
 from kohakuengine import load_config_file
 from torch import nn
 
-from latentdragon.io.arch_json import arch_from_json
-from latentdragon.model import AEArchConfig, build_autoencoder
-from latentdragon.model.blocks import Block
+from latentdragon.model import build_autoencoder
+from latentdragon.model.nn.blocks import Block
 
 ARCH_FILE: Path = Path("configs/ae/arch/sdvae.py")
 DEVICE: str = "cuda:0"
@@ -31,9 +30,9 @@ L2_MIB: float = 88.0  # RTX 5090 L2, from the card's public spec
 OUT: Path = Path("runs/bench/block_pressure.jsonl")
 
 
-def arch_of(path: Path, **changes) -> AEArchConfig:
-    """The `ARCH` of an arch config file, with fields replaced by `changes`."""
-    return arch_from_json({**load_config_file(path).globals_dict["ARCH"], **changes})
+def arch_of(path: Path, **changes) -> dict:
+    """The `ARCH` of an arch config file, with parts replaced by `changes`."""
+    return {**load_config_file(path).globals_dict["ARCH"], **changes}
 
 
 def best_seconds(run, rounds: int = 12) -> float:
@@ -150,8 +149,7 @@ def block_inputs(model, x) -> list:
         if isinstance(m, Block)
     ]
     with torch.no_grad(), torch.autocast("cuda", dtype=DTYPE):
-        out = model.bottleneck(model.encode(x))
-        model.head(model.decode(out.z))
+        model({"x": x})
     for handle in handles:
         handle.remove()
     return seen

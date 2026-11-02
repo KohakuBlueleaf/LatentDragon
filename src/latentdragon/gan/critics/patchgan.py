@@ -22,8 +22,10 @@ class PatchGAN(Critic):
 
     tracks_stats = True
 
-    def __init__(self, input_nc: int = 3, ndf: int = 64, n_layers: int = 3):
-        super().__init__()
+    def __init__(
+        self, input_nc: int = 3, ndf: int = 64, n_layers: int = 3, slot: str = "x"
+    ):
+        super().__init__(slot)
         kw, padw = 4, 1
         layers = [nn.Conv2d(input_nc, ndf, kw, 2, padw), nn.LeakyReLU(0.2, True)]
         mult = 1
@@ -44,5 +46,5 @@ class PatchGAN(Critic):
         self.main = nn.Sequential(*layers)
         self.apply(weights_init)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def judge(self, x: torch.Tensor) -> torch.Tensor:
         return self.main(x)

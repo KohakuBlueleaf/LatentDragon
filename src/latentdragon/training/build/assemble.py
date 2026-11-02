@@ -8,7 +8,6 @@ import torch
 from anyschedule import AnySchedule
 
 from latentdragon.gan import CRITIC, GAN_SCHEME
-from latentdragon.io.arch_json import arch_from_json
 from latentdragon.latent import LATENT_TERM, LATENT_VIEW, TEACHER, WEIGHTING
 from latentdragon.model import (
     allow_donated_buffers,
@@ -17,8 +16,8 @@ from latentdragon.model import (
     compile_parts,
     configure,
 )
-from latentdragon.model.compile import SETUP
-from latentdragon.objectives import HEAD_OBJECTIVES, OBJECTIVE
+from latentdragon.model.runtime.compile import SETUP
+from latentdragon.objectives import OBJECTIVE
 from latentdragon.tasks import TASK, AutoencoderParts
 from latentdragon.tasks.freeze import frozen_parts
 from latentdragon.training.bundle import Bundle
@@ -27,7 +26,6 @@ from latentdragon.training.checkpoint.partial import (
     load_partial,
     refuse_frozen_missing,
 )
-from latentdragon.training.checks.problems import spec_name
 from latentdragon.training.ema import NamedEMA, NoEMA
 from latentdragon.training.optim import Adam16
 from latentdragon.training.parallel.reducer import REDUCER
@@ -41,15 +39,9 @@ OPTIMIZER = Registry("optimizer")
 OPTIMIZER.add("adam", functools.partial(torch.optim.Adam, fused=True))
 OPTIMIZER.add("adamw", functools.partial(torch.optim.AdamW, fused=True))
 OPTIMIZER.add("adam16", Adam16)
-LOSS_MODES = {"image": "2d", "video": "3d"}
-KEEP_FP32 = ("norm", "bias", "bottleneck")
+KEEP_FP32 = ("norm", "bias", "latent")
 log = get_logger(__name__)
 WIRE_DTYPES = {None: None, "bf16": torch.bfloat16, "fp16": torch.float16}
-
-
-def arch_config(k: dict):
-    """The architecture written in the `ARCH` knob."""
-    return arch_from_json(k["ARCH"])
 
 
 def _terms(k: dict) -> list:
@@ -60,14 +52,14 @@ def _terms(k: dict) -> list:
     ]
 
 
-def _objective(k: dict, arch):
-    """The `OBJECTIVE` knob, or the one paired with the head, in the domain's loss mode."""
-    name = k["OBJECTIVE"] or HEAD_OBJECTIVES[spec_name(arch.head)]
+def _objective(k: dict, model):
+    """The `OBJECTIVE` knob, or the one the head pairs with, over the domain's slots."""
+    name = k["OBJECTIVE"] or model.head.objective
     return build(
         name,
         OBJECTIVE,
         loss_configs=k["LOSS_CONFIGS"],
-        mode=LOSS_MODES[arch.domain],
+        loss_dims=model.domain.loss_dims,
     )
 
 
@@ -84,8 +76,7 @@ def _cast_to_policy(k: dict, model, critic) -> None:
 def build_task(k: dict, device):
     """Model, critic, objective, scheme, views and terms, on `device`."""
     configure(k["COMPILE"], k["COMPILE_MODE"], k["COMPILE_DYNAMIC"], k["COMPILE_TUNE"])
-    arch = arch_config(k)
-    model = build_autoencoder(arch)
+    model = build_autoencoder(k["ARCH"])
 
     # Seed weights from INIT_FROM unless a checkpoint of a resumed run supersedes them.
     resuming = k.get("RESUME") and latest(Path(k["RESUME"]) / "checkpoints")
@@ -97,11 +88,11 @@ def build_task(k: dict, device):
     allow_donated_buffers(not scheme.retained_backward)
     critic = None
     if scheme.uses_critic:
-        critic = build(k["CRITIC"], CRITIC, input_nc=arch.image_dim)
+        critic = build(k["CRITIC"], CRITIC)
 
     parts = AutoencoderParts(
         model=model,
-        objective=_objective(k, arch),
+        objective=_objective(k, model),
         scheme=scheme,
         critic=critic,
         views=[build(spec, LATENT_VIEW) for spec in k["LATENT_VIEWS"]],
@@ -111,9 +102,7 @@ def build_task(k: dict, device):
         },
         aux_weights=k["AUX_WEIGHTS"],
         frozen=frozen_parts(model, k["FREEZE"]),
-        enc_lr_scale=k["ENC_LR_SCALE"],
-        vq_lr_scale=k["VQ_LR_SCALE"],
-        disc_lr_scale=k["DISC_LR_SCALE"],
+        lr_scales=k["LR_SCALES"],
         metrics_every=k["METRICS_EVERY"],
         usage_window=k["USAGE_WINDOW"],
     )
@@ -122,7 +111,7 @@ def build_task(k: dict, device):
     # Memory/speed transforms, then move everything to the device.
     if k["GRAD_CKPT"]:
         apply_recompute(model)
-    compile_parts((model.encoder, model.trunk, model.head))
+    compile_parts((model.encoder, model.decoder, model.head))
     if k["COMPILE_LOSS"]:
         parts.objective.compile(**SETUP.kwargs())
         if critic is not None and not scheme.second_order:

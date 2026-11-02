@@ -29,9 +29,7 @@ RESUME_IGNORE: list[str] = []  # knobs allowed to differ on resume
 INIT_FROM: str | None = (
     None  # weights for a new stage: a safetensors file or checkpoint folder
 )
-FREEZE: list[str] = (
-    []
-)  # model parts held fixed, e.g. ["encoder", "bottleneck", "trunk"]
+FREEZE: list[str] = []  # model paths held fixed, e.g. ["encoder", "latent", "decoder"]
 
 # --- data ---
 TRAIN_SOURCES: list[dict] = []  # e.g. [{"name": "image_folder", "root": "..."}]
@@ -42,13 +40,30 @@ VAL_WORKERS = 4
 VAL_BATCH_SIZE = 64
 
 # --- model ---
-ARCH = {  # every AEArchConfig field; a recipe gets its own from configs/ae/arch/
-    "latent_dim": 4,
-    "encoder": "conv",
-    "encoder_blocks": [[2, 8, 1]],
-    "trunk": "conv",
-    "trunk_blocks": [[2, 8, 1]],
-    "bottleneck": {"name": "vq", "quantizer": {"name": "kohaku", "n_embed": 8}},
+# domain, encoder, latent, decoder and head, each a registry choice with its own kwargs;
+# a recipe takes its own from configs/ae/arch/
+ARCH = {
+    "domain": "image",
+    "encoder": {
+        "name": "sdvae",
+        "out_channels": 4,
+        "stages": [[2, 8, 1]],
+        "norm": "rms",
+    },
+    "latent": {"name": "vq", "dim": 4, "quantizer": {"name": "kohaku", "n_embed": 8}},
+    "decoder": {
+        "name": "sdvae",
+        "in_channels": 4,
+        "stages": [[2, 8, 1]],
+        "norm": "rms",
+    },
+    "head": {
+        "name": "conv",
+        "in_channels": 8,
+        "kernel_size": 3,
+        "norm": "rms",
+        "act": "mish",
+    },
 }
 GRAD_CKPT = False
 COMPILE: Literal["off", "function", "module", "model"] = "off"
@@ -63,11 +78,11 @@ KERNEL_TUNE = "on"  # on times candidates on first use; off binds the first one
 
 # --- objective ---
 OBJECTIVE: str | None = None  # None selects the objective paired with the head
-LOSS_CONFIGS = []
+LOSS_CONFIGS: list | dict = []  # sensecraft terms; a dict of them per data slot
 LOSS_16BIT = True  # hold the frozen loss networks in the compute dtype
-AUX_WEIGHTS = {"vq": 1.0, "kl": 0.0}
+AUX_WEIGHTS = {"vq": 1.0, "kl": 0.0}  # weight per latent def loss name; others take 1
 GAN_SCHEME = "none"
-CRITIC: dict | None = None
+CRITIC: dict | None = None  # e.g. {"name": "patchgan", "slot": "x"}
 
 # --- latent slots ---
 LATENT_VIEWS: list = []
@@ -89,9 +104,7 @@ REDUCER = {"name": "bucketed", "bucket_mib": 8.0}  # bucketed | flat | none
 # --- optimizer ---
 OPTIMIZER = "adam"
 LR = 2e-4
-ENC_LR_SCALE = 1.0
-VQ_LR_SCALE = 1.0
-DISC_LR_SCALE = 1.0
+LR_SCALES: dict = {}  # per group: encoder, latent, decoder, head, critic; others take 1
 BETAS = (0.5, 0.95)
 WEIGHT_DECAY = 0.0
 SCHEDULER_CONFIG = {"mode": "cosine", "min_value": 0.01, "warmup": 0, "end": -1}
@@ -100,7 +113,7 @@ EMA_DECAY = 0.999  # 0 turns EMA off
 # --- cadence ---
 FLUSH_EVERY = 100  # every step is logged; this many rows share one device-to-host copy
 METRICS_EVERY = 1  # steps between PSNR, SSIM, latent and code-usage stats
-USAGE_WINDOW = 1000  # steps a code counts as used in vq/usage_ema
+USAGE_WINDOW = 1000  # steps a code counts as used in vq/usage_window
 SAMPLE_EVERY = 1000
 VAL_EVERY = 10000
 CKPT_EVERY = 10000

@@ -1,4 +1,4 @@
-"""The `video` domain: `(B, T, C, H, W)`, first frame is the keyframe."""
+"""The `video` domain: one slot of `(B, T, C, H, W)`, the first frame is the keyframe."""
 
 from collections.abc import Callable
 from functools import partial
@@ -9,13 +9,19 @@ import torch.nn.functional as F
 import torchvision.transforms as trns
 from torch import Tensor
 
-from latentdragon.domain.record import DOMAIN, Domain, sample_grid, save_image_grid
+from latentdragon.domain.record import (
+    DOMAIN,
+    Domain,
+    ToSlot,
+    sample_grid,
+    save_image_grid,
+)
 
 
-def video_transforms(size: int, train: bool) -> Callable:
-    """`(T, C, H, W)` clip to a normalized tensor with one crop for all frames."""
+def video_transforms(size: int, train: bool, slot: str = "x") -> Callable:
+    """`(T, C, H, W)` clip to `{slot: tensor}` with one crop for all frames."""
     crop = trns.RandomCrop(size) if train else trns.CenterCrop(size)
-    return trns.Compose(
+    pipeline = trns.Compose(
         [
             trns.Resize(size, antialias=True),
             crop,
@@ -23,10 +29,16 @@ def video_transforms(size: int, train: bool) -> Callable:
             trns.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
         ]
     )
+    return ToSlot(slot, pipeline)
 
 
 def fit_video_latents(latents: Tensor, real: Tensor) -> Tensor:
-    """Scale rendered latents to the sample size; frames repeat to the clip length."""
+    """Scale a channels-first latent preview to the sample size; frames repeat to the clip.
+
+    A `(B, 3, T, H, W)` preview becomes frames; a `(B, 3, H, W)` one is a single frame.
+    """
+    latents = latents[:, :, None] if latents.ndim == 4 else latents
+    latents = latents.movedim(1, 2)
     batch, latent_t = latents.shape[:2]
     clip_t = real.size(1)
     frames = F.interpolate(
@@ -48,18 +60,16 @@ def save_video_grid(grid: Tensor, path: Path, frames: int = 4) -> None:
     save_image_grid(torch.cat(list(grid[:frames]), dim=1), path)
 
 
-VIDEO = Domain(
-    name="video",
-    rank=5,
-    transforms=video_transforms,
-    metrics=("psnr", "ssim", "rfid"),
-    to_grid=partial(sample_grid, fit_video_latents),
-    to_frames=video_to_frames,
-    save_grid=save_video_grid,
-)
-
-
 @DOMAIN.register("video")
-def video_domain() -> Domain:
-    """The video record."""
-    return VIDEO
+def video_domain(slot: str = "x") -> Domain:
+    """Clips under one slot, `x` by default."""
+    return Domain(
+        name="video",
+        slots=(slot,),
+        transforms=partial(video_transforms, slot=slot),
+        loss_dims={slot: 3},
+        metrics={slot: ("psnr", "ssim", "rfid")},
+        to_frames={slot: video_to_frames},
+        to_grid=partial(sample_grid, fit_video_latents, slot),
+        save_grid=save_video_grid,
+    )

@@ -6,9 +6,9 @@ from typing import Any
 import torch.nn as nn
 from torch import Tensor
 
-from latentdragon.model.compile import compile_wrapper
-from latentdragon.model.layers import RMSNorm, SwiGLU
-from latentdragon.model.temporal import CausalTemporalConv, SpatialDWConv
+from latentdragon.model.nn.layers import RMSNorm, SwiGLU
+from latentdragon.model.nn.temporal import CausalTemporalConv, SpatialDWConv
+from latentdragon.model.runtime.compile import compile_wrapper
 from latentdragon_common.registry import Registry, build
 
 BLOCK = Registry("block")

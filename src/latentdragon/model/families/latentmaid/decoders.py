@@ -1,4 +1,8 @@
-"""Trunks: decoder bodies up to, not including, the head."""
+"""LatentMaid decoders: pixel-shuffle stages of MLP blocks, for images and video.
+
+Each reads one decoder slot and writes one feature slot, the output latent a head turns into
+the signal. `out_channels` is the width of that feature slot.
+"""
 
 from collections.abc import Callable, Sequence
 from fractions import Fraction
@@ -12,42 +16,40 @@ import torch.nn.functional as F
 from optimfactory import mup_init
 from torch import Tensor
 
-from latentdragon.model.layers import resolve_norm
-from latentdragon.model.reach import Reach, declared, is_local
-from latentdragon.model.stages import (
-    ConvStage,
+from latentdragon.model.core.contracts import DECODER, TensorPart
+from latentdragon.model.nn.layers import resolve_norm
+from latentdragon.model.nn.reach import Reach, declared, is_local
+from latentdragon.model.nn.stages import (
     StageSpec,
     attn_slots,
     block_stack,
     call_block,
     product,
 )
-from latentdragon.model.streaming import FrameCache
-from latentdragon.model.temporal import (
+from latentdragon.model.nn.streaming import FrameCache
+from latentdragon.model.nn.temporal import (
     SpatialConv2d,
     TemporalUpsample,
     make_fuser,
 )
-from latentdragon_common.registry import Registry
-
-TRUNK = Registry("trunk")
 
 
-class ShuffleTrunk(nn.Module):
+class ShuffleDecoder(TensorPart):
     """Pixel-shuffle stages run from the last spec to the first."""
 
     def __init__(
         self,
-        latent_dim: int,
+        in_channels: int,
         specs: Sequence[StageSpec],
-        attn_block_configs: Sequence[int] | None,
-        norm_layer: str | Callable,
+        attn: Sequence[int] | None,
+        norm: str | Callable,
         block: Any,
         conv: type[nn.Conv2d],
+        input: str,
+        output: str,
     ):
-        super().__init__()
-        norm_layer = resolve_norm(norm_layer)
-        self.latent_dim = latent_dim
+        super().__init__(input, output)
+        norm_layer = resolve_norm(norm)
 
         # Stages run from the last spec to the first
         walk = list(reversed(specs))
@@ -56,7 +58,7 @@ class ShuffleTrunk(nn.Module):
 
         # Per stage: channel projection, temporal fuser and block stack
         stage_projs, fusers, stages = [], [], []
-        dim = latent_dim
+        dim = in_channels
         for spec in walk:
             hidden = spec.hidden
             stage_projs.append(conv(dim, hidden, 1) if dim != hidden else nn.Identity())
@@ -68,9 +70,9 @@ class ShuffleTrunk(nn.Module):
         self.temporal_fuser = nn.ModuleList(fusers)
         self.stages = nn.ModuleList(stages)
 
-        flags = list(reversed(attn_block_configs)) if attn_block_configs else None
+        flags = list(reversed(attn)) if attn else None
         self.attn_blocks = attn_slots(flags, [spec.hidden for spec in walk], norm_layer)
-        self.out_dim = dim
+        self.out_channels = dim
         mup_init(self.parameters())
 
     @property
@@ -82,11 +84,6 @@ class ShuffleTrunk(nn.Module):
     def temporal_scale(self) -> int:
         """Total temporal upsampling factor."""
         return product(self.t_scales)
-
-    @property
-    def head_form(self) -> dict[str, Any]:
-        """Head arguments matching this trunk's output."""
-        return {"kernel_size": 1}
 
     def reach(self, start: int = 0, tail: int = 0) -> Reach:
         """Reach of stages from `start` plus `tail` output pixels, on that stage's grid."""
@@ -133,12 +130,12 @@ class ShuffleTrunk(nn.Module):
             x = F.pixel_shuffle(x, scale)
         return x
 
-    def forward(self, z: Tensor) -> Tensor:
-        """Latents to trunk features."""
+    def tensor(self, z: Tensor) -> Tensor:
+        """Decoder input to features."""
         return self.features(z)
 
     def forward_early(self, z: Tensor, stop: int) -> Tensor:
-        """Latents through the stages before `stop`."""
+        """Decoder input through the stages before `stop`."""
         return self.features(z, stop=stop)
 
     def forward_late(self, x: Tensor, start: int) -> Tensor:
@@ -146,63 +143,63 @@ class ShuffleTrunk(nn.Module):
         return self.features(x, start=start)
 
 
-@TRUNK.register("mlp")
-class MLPTrunk(ShuffleTrunk):
-    """Image trunk; stage tuples are `(scale, hidden, mlp, blocks)`, last runs first."""
+@DECODER.register("latentmaid")
+class LatentMaidDecoder(ShuffleDecoder):
+    """Image decoder; stages are `(scale, hidden, mlp, blocks)`, the last runs first."""
 
     def __init__(
         self,
-        latent_dim: int,
-        block_configs: Sequence[Sequence[int]],
-        attn_block_configs: Sequence[int] | None = None,
-        norm_layer: str | Callable = "rms",
+        in_channels: int,
+        stages: Sequence[Sequence[int]],
+        attn: Sequence[int] | None = None,
+        norm: str | Callable = "rms",
         block: Any = "mlp",
+        input: str = "z",
+        output: str = "y",
     ):
         super().__init__(
-            latent_dim,
-            [StageSpec.image(cfg) for cfg in block_configs],
-            attn_block_configs,
-            norm_layer,
+            in_channels,
+            [StageSpec.image(cfg) for cfg in stages],
+            attn,
+            norm,
             block,
             nn.Conv2d,
+            input,
+            output,
         )
 
 
-@TRUNK.register("video")
-class VideoTrunk(ShuffleTrunk):
-    """Latents with channels at dim 1 to `(B, T, C, H, W)` features."""
+@DECODER.register("latentmaid_video")
+class LatentMaidVideoDecoder(ShuffleDecoder):
+    """`(B, C, T, H, W)` to `(B, T, C, H, W)` features; stages as the video encoder's."""
 
     def __init__(
         self,
-        latent_dim: int,
-        block_configs: Sequence[Sequence[int]],
-        attn_block_configs: Sequence[int] | None = None,
-        norm_layer: str | Callable = "rms",
+        in_channels: int,
+        stages: Sequence[Sequence[int]],
+        norm: str | Callable = "rms",
         block: Any = "mlp3d",
+        input: str = "z",
+        output: str = "y",
     ):
-        if attn_block_configs and any(attn_block_configs):
-            raise ValueError("video stages have no attention")
         super().__init__(
-            latent_dim,
-            [StageSpec.video(cfg) for cfg in block_configs],
+            in_channels,
+            [StageSpec.video(cfg) for cfg in stages],
             None,
-            norm_layer,
+            norm,
             block,
             SpatialConv2d,
+            input,
+            output,
         )
 
-    @property
-    def head_form(self) -> dict[str, Any]:
-        """Head arguments matching this trunk's output."""
-        return {"kernel_size": 1, "conv": SpatialConv2d}
-
-    def forward(self, z: Tensor, has_keyframe: bool = True) -> Tensor:
-        """Latents `(B, C, T, H, W)` to `(B, T, C, H, W)` features."""
+    def tensor(self, z: Tensor, has_keyframe: bool = True) -> Tensor:
+        """Decoder input `(B, C, T, H, W)` to `(B, T, C, H, W)` features."""
         step = partial(call_block, has_keyframe=has_keyframe)
         return self.features(z.transpose(1, 2), step, has_keyframe=has_keyframe)
 
     def forward_early(self, z: Tensor, stop: int, has_keyframe: bool = True) -> Tensor:
-        """Latents `(B, C, T, H, W)` through the stages before `stop`, as `(B, T, C, H, W)`."""
+        """Decoder input through the stages before `stop`, as `(B, T, C, H, W)`."""
         step = partial(call_block, has_keyframe=has_keyframe)
         return self.features(
             z.transpose(1, 2), step, stop=stop, has_keyframe=has_keyframe
@@ -226,82 +223,3 @@ class VideoTrunk(ShuffleTrunk):
             self.features(z.transpose(1, 2), walk, has_keyframe=has_keyframe),
             walk.new,
         )
-
-
-@TRUNK.register("conv")
-class ConvTrunk(nn.Module):
-    """SD-style image trunk; tuples are `(scale, hidden, blocks)`, first runs first."""
-
-    def __init__(
-        self,
-        latent_dim: int,
-        block_configs: Sequence[Sequence[int]],
-        attn_block_configs: Sequence[int] | None = None,
-        norm_layer: str | Callable = "rms",
-        block: Any = "res",
-    ):
-        super().__init__()
-        norm_layer = resolve_norm(norm_layer)
-        self.latent_dim = latent_dim
-        self.norm_layer = norm_layer
-        self.scales = [scale for scale, _, _ in block_configs]
-        self.conv_in = nn.Conv2d(latent_dim, block_configs[0][1], 3, 1, 1)
-
-        # One conv stage per config; record the width entering each for attention
-        self.stages = nn.ModuleList()
-        in_dim = block_configs[0][1]
-        entering = []
-        for scale, dim, blocks in block_configs:
-            entering.append(in_dim)
-            self.stages.append(
-                ConvStage(
-                    in_dim, dim, blocks, scale=scale, norm_layer=norm_layer, block=block
-                )
-            )
-            in_dim = dim
-
-        self.attn_blocks = attn_slots(attn_block_configs, entering, norm_layer)
-        self.out_dim = in_dim
-        mup_init(self.parameters())
-
-    @property
-    def spatial_scale(self) -> int:
-        """Total spatial upsampling factor."""
-        return product(self.scales)
-
-    @property
-    def temporal_scale(self) -> int:
-        """Image trunks never scale frames."""
-        return 1
-
-    @property
-    def head_form(self) -> dict[str, Any]:
-        """Head arguments matching this trunk's output."""
-        return {"kernel_size": 3, "norm_layer": self.norm_layer, "act": nn.Mish}
-
-    def reach(self, start: int = 0, tail: int = 0) -> Reach:
-        """Reach of stages from `start` plus `tail` output pixels, on that stage's grid."""
-        stages = list(self.stages[start:])
-        blocks = [block for stage in stages for block in stage.blocks]
-        attention = self.attn_blocks[start:]
-
-        # The input conv, then each stage's blocks and its upsampling conv
-        spatial = Fraction(0 if start else 1)
-        spatial_step = 1
-        for scale, stage in zip(self.scales[start:], stages):
-            for block in stage.blocks:
-                spatial += Fraction(block.spatial_reach or 0, spatial_step)
-            spatial_step *= scale
-            if scale > 1:
-                spatial += Fraction(1, spatial_step)
-        spatial += Fraction(tail, spatial_step)
-
-        bounded = declared(blocks) and is_local([*stages, *attention])
-        return Reach(ceil(spatial) if bounded else None)
-
-    def forward(self, z: Tensor) -> Tensor:
-        """Latents to trunk features; attention precedes each stage."""
-        x = self.conv_in(z)
-        for stage, attn in zip(self.stages, self.attn_blocks):
-            x = stage(attn(x))
-        return x

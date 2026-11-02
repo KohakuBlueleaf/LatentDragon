@@ -33,7 +33,7 @@ def all_problems_are_reported_together(folder) -> None:
         MAX_STEPS=0,
         BATCH_SIZE=3,
         GRAD_ACC=2,
-        FREEZE=["trunk.nothing"],
+        FREEZE=["decoder.nothing"],
         TRAIN_SOURCES=[],
     )
     values["BATCH_SZE"] = 2
@@ -50,7 +50,7 @@ def all_problems_are_reported_together(folder) -> None:
         "nope",
         "MAX_STEPS",
         "not divisible",
-        "trunk.nothing",
+        "decoder.nothing",
         "TRAIN_SOURCES",
     )
     for needle in expected:
@@ -58,7 +58,7 @@ def all_problems_are_reported_together(folder) -> None:
 
 
 def bad_arch_is_reported(folder) -> None:
-    values = knobs(folder, ARCH={**TINY_ARCH, "trunk": "nope"})
+    values = knobs(folder, ARCH={**TINY_ARCH, "decoder": {"name": "nope"}})
     try:
         check(values, str(SCRIPT))
     except SystemExit as err:

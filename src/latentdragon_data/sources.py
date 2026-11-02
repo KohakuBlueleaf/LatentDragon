@@ -130,16 +130,28 @@ class VideoFolder(FileSource):
 
 @SOURCE.register("synthetic")
 class Synthetic(Dataset):
-    """Fixed random `shape` samples, for measuring a step without file reads."""
+    """Fixed random samples, for measuring a step without file reads.
 
-    def __init__(self, transform=None, shape=(3, 256, 256), count: int = 4096):
+    `shape` is one slot's sample shape, or a dict of shapes per slot.
+    """
+
+    def __init__(
+        self,
+        transform=None,
+        shape: tuple | dict = (3, 256, 256),
+        count: int = 4096,
+        slot: str = "x",
+    ):
         self.count = count
-        self.sample = torch.rand(tuple(shape)) * 2 - 1
+        shapes = shape if isinstance(shape, dict) else {slot: shape}
+        self.sample = {
+            name: torch.rand(tuple(size)) * 2 - 1 for name, size in shapes.items()
+        }
 
     def __len__(self) -> int:
         return self.count
 
-    def __getitem__(self, index: int) -> torch.Tensor:
+    def __getitem__(self, index: int) -> dict:
         return self.sample
 
 

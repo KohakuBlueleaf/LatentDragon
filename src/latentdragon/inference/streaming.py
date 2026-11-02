@@ -50,10 +50,10 @@ class StreamingDecode(DecodeStrategy):
         """Yield `(B, T, C, H, W)` output frames per chunk."""
         cache: list[Tensor] = []
         for start, end in self._spans(z, has_keyframe):
-            features, cache = model.trunk.forward_stream(
+            features, cache = model.decoder.forward_stream(
                 z[:, :, start:end], start == 0, cache, self.offload_cache
             )
-            yield model.head(features)
+            yield model.head.tensor(features)
 
     def __call__(
         self, model: Autoencoder, z: Tensor, has_keyframe: bool = True
@@ -91,16 +91,16 @@ class StreamingTiledDecode(StreamingDecode):
         for start, end in self._spans(z, has_keyframe):
 
             def decode(part: Tensor, index: int) -> Tensor:
-                features, caches[index] = model.trunk.forward_stream(
+                features, caches[index] = model.decoder.forward_stream(
                     part, start == 0, caches.get(index, []), self.offload_cache
                 )
-                return model.head(features)
+                return model.head.tensor(features)
 
             yield stitch(
                 z[:, :, start:end],
                 self.tile,
                 overlap,
-                model.trunk.spatial_scale,
+                model.decoder.spatial_scale,
                 decode,
             )
 
@@ -113,7 +113,7 @@ def stream_encode(
     frames_per_step: int | None = None,
     offload_cache: bool = False,
 ) -> Iterator[Tensor]:
-    """Yield raw encoder latents `(B, C, T, H, W)` per chunk of a `(B, T, C, H, W)` clip.
+    """Yield encoder outputs `(B, C, T, H, W)` per chunk of a `(B, T, C, H, W)` clip.
 
     Defaults to one latent per chunk: the first chunk takes the keyframe and one group.
     """

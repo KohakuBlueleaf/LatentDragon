@@ -1,0 +1,177 @@
+"""LatentMaid encoders: pixel-unshuffle stages of MLP blocks, for images and video.
+
+Each reads one data slot and writes one encoder slot with channels at dim 1. `out_channels` is
+what the latent def downstream reads, e.g. twice the latent channels for `kl`.
+"""
+
+from collections.abc import Callable, Sequence
+from functools import partial
+from typing import Any
+
+import torch.nn as nn
+import torch.nn.functional as F
+from optimfactory import mup_init
+from torch import Tensor
+
+from latentdragon.model.core.contracts import ENCODER, TensorPart
+from latentdragon.model.nn.layers import resolve_norm
+from latentdragon.model.nn.stages import (
+    StageSpec,
+    attn_slots,
+    block_stack,
+    call_block,
+    product,
+)
+from latentdragon.model.nn.streaming import FrameCache
+from latentdragon.model.nn.temporal import (
+    SpatialConv2d,
+    TemporalDownsample,
+    make_fuser,
+)
+
+
+class ShuffleEncoder(TensorPart):
+    """Pixel-unshuffle stages; block, conv and fuser are chosen at build."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        specs: Sequence[StageSpec],
+        attn: Sequence[int] | None,
+        norm: str | Callable,
+        block: Any,
+        conv: type[nn.Conv2d],
+        input: str,
+        output: str,
+    ):
+        super().__init__(input, output)
+        norm_layer = resolve_norm(norm)
+        self.scales = [spec.scale for spec in specs]
+        self.t_scales = [spec.t_scale for spec in specs]
+
+        # Per stage: temporal fuser, block stack and channel projection
+        stages, stage_projs, fusers, hidden_dims = [], [], [], []
+        dim = in_channels
+        for spec in specs:
+            dim = dim * spec.scale**2
+            hidden = spec.hidden or dim
+            fusers.append(make_fuser(TemporalDownsample, hidden, spec.t_scale))
+            stages.append(block_stack(block, spec.blocks, hidden, spec.mlp, norm_layer))
+            stage_projs.append(conv(dim, hidden, 1) if hidden != dim else nn.Identity())
+            hidden_dims.append(hidden)
+            dim = hidden
+
+        self.stages = nn.ModuleList(stages)
+        self.stage_projs = nn.ModuleList(stage_projs)
+        self.temporal_stages = nn.ModuleList(fusers)
+        self.attn_blocks = attn_slots(attn, hidden_dims, norm_layer)
+        self.out_proj = conv(dim, out_channels, 1)
+        mup_init(self.parameters())
+
+    @property
+    def last_layer(self) -> nn.Module:
+        """The output projection."""
+        return self.out_proj
+
+    @property
+    def spatial_scale(self) -> int:
+        """Total spatial downsampling factor."""
+        return product(self.scales)
+
+    @property
+    def temporal_scale(self) -> int:
+        """Total temporal downsampling factor."""
+        return product(self.t_scales)
+
+    def features(self, x: Tensor, step: Callable = call_block, **frames) -> Tensor:
+        """Walk the stages; `step` runs one block."""
+        for scale, stage, proj, fuser, attn in zip(
+            self.scales,
+            self.stages,
+            self.stage_projs,
+            self.temporal_stages,
+            self.attn_blocks,
+        ):
+            x = fuser(proj(F.pixel_unshuffle(x, scale)), **frames)
+            for block in stage:
+                x = step(block, x)
+            x = attn(x)
+        return x
+
+    def tensor(self, x: Tensor) -> Tensor:
+        """Signal to the encoder output."""
+        return self.out_proj(self.features(x))
+
+
+@ENCODER.register("latentmaid")
+class LatentMaidEncoder(ShuffleEncoder):
+    """Image encoder; stages are `(scale, hidden, mlp, blocks)`."""
+
+    def __init__(
+        self,
+        out_channels: int,
+        stages: Sequence[Sequence[int]],
+        in_channels: int = 3,
+        attn: Sequence[int] | None = None,
+        norm: str | Callable = "rms",
+        block: Any = "mlp",
+        input: str = "x",
+        output: str = "h",
+    ):
+        super().__init__(
+            in_channels,
+            out_channels,
+            [StageSpec.image(cfg) for cfg in stages],
+            attn,
+            norm,
+            block,
+            nn.Conv2d,
+            input,
+            output,
+        )
+
+
+@ENCODER.register("latentmaid_video")
+class LatentMaidVideoEncoder(ShuffleEncoder):
+    """`(B, T, C, H, W)` to `(B, C, T, H, W)`; stages are `(t_scale, scale, hidden, mlp, blocks)`."""
+
+    def __init__(
+        self,
+        out_channels: int,
+        stages: Sequence[Sequence[int]],
+        in_channels: int = 3,
+        norm: str | Callable = "rms",
+        block: Any = "mlp3d",
+        input: str = "x",
+        output: str = "h",
+    ):
+        super().__init__(
+            in_channels,
+            out_channels,
+            [StageSpec.video(cfg) for cfg in stages],
+            None,
+            norm,
+            block,
+            SpatialConv2d,
+            input,
+            output,
+        )
+
+    def tensor(self, x: Tensor, has_keyframe: bool = True) -> Tensor:
+        """Clip `(B, T, C, H, W)` to `(B, C, T, H, W)`."""
+        step = partial(call_block, has_keyframe=has_keyframe)
+        features = self.features(x, step, has_keyframe=has_keyframe)
+        return self.out_proj(features).transpose(1, 2)
+
+    def forward_stream(
+        self,
+        x: Tensor,
+        has_keyframe: bool,
+        cache: list[Tensor],
+        offload_cache: bool = False,
+    ) -> tuple[Tensor, list[Tensor]]:
+        """Encode one chunk; pass the returned cache with the next chunk."""
+        walk = FrameCache(cache, has_keyframe, x.device, offload_cache)
+        features = self.features(x, walk, has_keyframe=has_keyframe)
+        return self.out_proj(features).transpose(1, 2), walk.new

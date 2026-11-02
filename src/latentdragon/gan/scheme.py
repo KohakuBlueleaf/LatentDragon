@@ -2,9 +2,11 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import torch
 
+from latentdragon.model.core import tree
 from latentdragon_common.registry import Registry
 
 GAN_SCHEME = Registry("gan scheme")
@@ -12,11 +14,11 @@ GAN_SCHEME = Registry("gan scheme")
 
 @dataclass
 class GanMicro:
-    """One decoded view of one micro-batch."""
+    """One decoded view of one micro-batch; `real`, `fake` and `recon_seed` are slot dicts."""
 
-    real: torch.Tensor
-    fake: torch.Tensor
-    recon_seed: torch.Tensor
+    real: Any
+    fake: Any
+    recon_seed: Any
     aux: list[tuple[float, torch.Tensor]] = field(default_factory=list)
 
 
@@ -37,12 +39,35 @@ class GanCtx:
 
 def seed_of(
     loss: torch.Tensor,
-    wrt: torch.Tensor,
+    wrt: Any,
     scale: float = 1.0,
     retain_graph: bool = False,
-) -> torch.Tensor:
-    """`d loss / d wrt`, taken scaled so low-precision graphs do not underflow."""
-    return torch.autograd.grad(loss * scale, wrt, retain_graph=retain_graph)[0] / scale
+) -> Any:
+    """`d loss / d wrt` over a slot dict, taken scaled so low-precision graphs do not underflow."""
+    found = tree.grad(loss * scale, wrt, retain_graph=retain_graph)
+    return tree.map_tensors(lambda g: g / scale, found)
+
+
+def detached(slots):
+    """A slot dict with every tensor detached."""
+    return tree.map_tensors(lambda t: t.detach(), slots)
+
+
+def leaf(slots):
+    """A slot dict of detached tensors that take gradients."""
+    return tree.map_tensors(lambda t: t.detach().requires_grad_(True), slots)
+
+
+def scaled(seed: Any, factor) -> Any:
+    """Every tensor of a seed times `factor`."""
+    return tree.map_tensors(lambda g: g * factor, seed)
+
+
+def added(left: Any, right: Any) -> Any:
+    """Two seeds of the same slots, summed tensor by tensor."""
+    return tree.like(
+        left, [a + b for a, b in zip(tree.leaves(left), tree.leaves(right))]
+    )
 
 
 def aux_scalar(m: GanMicro, micro_count: int) -> torch.Tensor | None:
@@ -55,17 +80,17 @@ def aux_scalar(m: GanMicro, micro_count: int) -> torch.Tensor | None:
 
 
 def composed_scalar(m: GanMicro, seed: torch.Tensor, micro_count: int) -> torch.Tensor:
-    """`(fake * seed).sum()` plus the micro's weighted auxiliary scalars."""
-    scalar = (m.fake * seed).sum()
+    """`(fake * seed).sum()` over every slot plus the micro's weighted auxiliary scalars."""
+    scalar = tree.dot(m.fake, seed)
     extra = aux_scalar(m, micro_count)
     return scalar if extra is None else scalar + extra
 
 
 def gen_backward(ctx: GanCtx, adv_term: torch.Tensor | None) -> None:
     """The single composed generator backward for one micro-batch."""
-    seed = ctx.m.recon_seed / ctx.micro_count
+    seed = scaled(ctx.m.recon_seed, 1 / ctx.micro_count)
     if adv_term is not None:
-        seed = seed + adv_term
+        seed = added(seed, adv_term)
     final = ctx.micro_index == ctx.micro_count - 1
     ctx.backward_g(composed_scalar(ctx.m, seed, ctx.micro_count), final=final)
 
@@ -95,6 +120,7 @@ class GanScheme:
         False  # backward through a gradient, which no compiled graph does
     )
     retained_backward: bool = False  # walks one graph twice under `retain_graph`
+    needs_anchor: bool = False  # reads gradients at the head's `last_layer` weight
 
     def for_critic(self, critic) -> "GanScheme":
         """This scheme specialised for a built critic; default is unchanged."""

@@ -6,7 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from latentdragon.model.compile import compile_wrapper
+from latentdragon.model.runtime.compile import compile_wrapper
 from latentdragon_common.registry import Registry
 
 NORM = Registry("norm")

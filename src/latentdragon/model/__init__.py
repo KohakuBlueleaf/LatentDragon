@@ -1,55 +1,57 @@
-"""Encoders, trunks, heads and the autoencoder that composes them."""
+"""Autoencoder models: the slot contracts, their parts and the build.
 
-from latentdragon.model.arch import AEArchConfig, build_autoencoder
-from latentdragon.model.autoencoder import Autoencoder
-from latentdragon.model.blocks import BLOCK, Block, build_block
-from latentdragon.model.compile import (
+Importing this package registers every built-in encoder, latent def, decoder and head.
+"""
+
+from latentdragon.model import families, heads, latents
+from latentdragon.model.core import (
+    DECODER,
+    ENCODER,
+    HEAD,
+    LATENT,
+    Autoencoder,
+    Encoded,
+    LatentDef,
+    Part,
+    TensorPart,
+    build_autoencoder,
+    tree,
+)
+from latentdragon.model.nn import BLOCK, NORM, Reach
+from latentdragon.model.runtime.compile import (
     allow_donated_buffers,
     compile_parts,
     compile_wrapper,
     configure,
 )
-from latentdragon.model.encoders import (
-    ENCODER,
-    ConvEncoder,
-    MLPEncoder,
-    VideoEncoder,
-)
-from latentdragon.model.heads import HEAD, RegressionHead
-from latentdragon.model.layers import NORM, AttnBlock, SwiGLU, resolve_norm
-from latentdragon.model.mechanics import apply_recompute
-from latentdragon.model.reach import Reach
-from latentdragon.model.trunks import TRUNK, ConvTrunk, MLPTrunk, VideoTrunk
+from latentdragon.model.runtime.recompute import apply_recompute
 
 __all__ = [
     # registries
     "BLOCK",
+    "DECODER",
     "ENCODER",
     "HEAD",
+    "LATENT",
     "NORM",
-    "TRUNK",
-    # base classes and configs
-    "AEArchConfig",
-    "Block",
+    # contracts and records
+    "Encoded",
+    "LatentDef",
+    "Part",
     "Reach",
-    # concrete classes
-    "AttnBlock",
+    "TensorPart",
+    # composition
     "Autoencoder",
-    "ConvEncoder",
-    "ConvTrunk",
-    "MLPEncoder",
-    "MLPTrunk",
-    "RegressionHead",
-    "SwiGLU",
-    "VideoEncoder",
-    "VideoTrunk",
-    # builders and functions
-    "apply_recompute",
     "build_autoencoder",
-    "build_block",
+    # runtime
     "allow_donated_buffers",
+    "apply_recompute",
     "compile_parts",
     "compile_wrapper",
     "configure",
-    "resolve_norm",
+    # registering subpackages and slot trees
+    "families",
+    "heads",
+    "latents",
+    "tree",
 ]

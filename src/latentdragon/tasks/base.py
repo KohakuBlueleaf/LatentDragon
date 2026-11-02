@@ -4,6 +4,7 @@ from collections.abc import Iterable
 
 import torch
 
+from latentdragon.model.core import tree
 from latentdragon_common.registry import Registry
 
 TASK = Registry("task")
@@ -35,12 +36,13 @@ class Task:
         """Parameters tracked by weight EMA."""
         return {}
 
-    def split(self, batch: torch.Tensor, micro_count: int) -> Iterable:
-        """The micro-batches of one step."""
-        return batch.chunk(micro_count, dim=0)
+    def split(self, batch, micro_count: int) -> Iterable:
+        """The micro-batches of one step, every tensor split along dim 0."""
+        return tree.chunk(batch, micro_count)
 
-    def to_device(self, batch: torch.Tensor, device) -> torch.Tensor:
-        return batch.to(device, non_blocking=True, memory_format=self.memory_format)
+    def to_device(self, batch, device):
+        """Every tensor on `device`; 4D tensors take the task's memory format."""
+        return tree.to_device(batch, device, self.memory_format)
 
     def reduce_metrics(self, per_micro: list[dict]) -> dict:
         """Mean each key across the micro-batches that produced it."""

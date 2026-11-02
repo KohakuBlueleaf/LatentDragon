@@ -1,10 +1,14 @@
-"""Loading: every arch file builds, and every file format rebuilds the same model."""
+"""Loading: every arch file builds, every file format rebuilds the same model, and the
+flat arch and part names of older runs and exports still load."""
+
+import json
 
 import torch
 from _tiny import ROOT, run_checks
 from kohakuengine import load_config_file
+from safetensors.torch import save_file
 
-from latentdragon.io.arch_json import arch_from_json
+from latentdragon.io.arch_json import flat_fields, upgrade_arch
 from latentdragon.io.diffusers_model import LatentDragonVAE
 from latentdragon.io.export import load_export, save_diffusers, save_export
 from latentdragon.io.legacy import (
@@ -13,15 +17,17 @@ from latentdragon.io.legacy import (
     write_lightning,
     write_safetensors,
 )
-from latentdragon.model import AEArchConfig, build_autoencoder
+from latentdragon.model import build_autoencoder
 
-TINY = {
+# The flat form older runs and exports wrote; `upgrade_arch` reads it
+FLAT_TINY = {
     "latent_dim": 4,
     "encoder": "conv",
-    "encoder_blocks": ((2, 32, 1),),
+    "encoder_blocks": [[2, 32, 1]],
     "encoder_attn": None,
+    "encoder_norm": "rms",
     "trunk": "conv",
-    "trunk_blocks": ((2, 32, 1),),
+    "trunk_blocks": [[2, 32, 1]],
     "trunk_attn": None,
     "trunk_norm": "group32",
     "bottleneck": {
@@ -29,11 +35,12 @@ TINY = {
         "quantizer": {"name": "kohaku", "n_embed": 8, "partition_mode": "hyper"},
     },
 }
+OLD_PARTS = (("latent.", "bottleneck."), ("decoder.", "trunk."))
 
 
 def tiny_model():
     """A small KohakuVQ model and its arch."""
-    arch = AEArchConfig(**TINY)
+    arch = upgrade_arch(FLAT_TINY)
     return arch, build_autoencoder(arch).eval()
 
 
@@ -45,18 +52,33 @@ def rebuilt(arch, state: dict):
 
 
 def assert_same_output(first, second) -> None:
-    x = torch.randn(1, 3, 8, 8)
-    assert torch.equal(first(x)[0], second(x)[0])
+    x = {"x": torch.randn(1, 3, 8, 8)}
+    assert torch.equal(first(x)[0]["x"], second(x)[0]["x"])
 
 
 def every_arch_file_builds(folder) -> None:
-    files = sorted((ROOT / "configs" / "ae" / "arch").glob("*.py"))
+    files = sorted((ROOT / "configs" / "ae" / "arch").rglob("*.py"))
     assert files
     with torch.device("meta"):
         for path in files:
-            build_autoencoder(
-                arch_from_json(load_config_file(path).globals_dict["ARCH"])
-            )
+            build_autoencoder(load_config_file(path).globals_dict["ARCH"])
+
+
+def flat_arch_round_trips(folder) -> None:
+    arch, _ = tiny_model()
+    assert upgrade_arch(flat_fields(arch)) == arch
+
+
+def old_export_loads(folder) -> None:
+    arch, model = tiny_model()
+    state = {}
+    for key, value in model.state_dict().items():
+        for new, old in OLD_PARTS:
+            key = old + key.removeprefix(new) if key.startswith(new) else key
+        state[key] = value.contiguous()
+    save_file(state, str(folder / "model.safetensors"))
+    (folder / "spec.json").write_text(json.dumps(FLAT_TINY), encoding="utf-8")
+    assert_same_output(model, load_export(folder).eval())
 
 
 def native_export_loads(folder) -> None:
@@ -86,13 +108,15 @@ def diffusers_folder_loads(folder) -> None:
     loaded = LatentDragonVAE.from_pretrained(folder).eval()
 
     x = torch.randn(1, 3, 8, 8)
-    expected = model.bottleneck(model.encode(x)).raw
+    expected = model.latent.raw(model.encode({"x": x}))["z"]
     assert torch.equal(loaded.encode(x).latent_dist.mean, expected)
 
 
 if __name__ == "__main__":
     run_checks(
         every_arch_file_builds,
+        flat_arch_round_trips,
+        old_export_loads,
         native_export_loads,
         legacy_safetensors_loads,
         legacy_lightning_loads,

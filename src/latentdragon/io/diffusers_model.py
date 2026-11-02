@@ -15,7 +15,7 @@ except ImportError:
         return fn
 
 
-from latentdragon.io.arch_json import arch_from_json, diffusers_levels
+from latentdragon.io.arch_json import upgrade_arch
 from latentdragon.model import build_autoencoder
 
 
@@ -50,8 +50,7 @@ class LatentDragonVAE(ModelMixin, ConfigMixin):
         """Build the autoencoder from `arch`.
 
         Args:
-            arch: the `arch_to_json` form of an `AEArchConfig` (the `arch` entry of
-                the exported `config.json`).
+            arch: the `ARCH` dict (the `arch` entry of the exported `config.json`).
             latent_channels, block_out_channels: the diffusers VAE config fields; the
                 config gets the values derived from `arch` when they are None.
             latents_mean, latents_std: per-channel statistics for latent scaling,
@@ -59,26 +58,33 @@ class LatentDragonVAE(ModelMixin, ConfigMixin):
         """
         super().__init__()
 
-        config = arch_from_json(arch)
-        self.model = build_autoencoder(config)
+        arch = upgrade_arch(arch)
+        self.model = build_autoencoder(arch)
 
         # fill the config fields left as None from the arch
-        channels = config.latent_dim
+        channels = arch["decoder"]["in_channels"]
+        scale = getattr(self.model.encoder, "spatial_scale", 1)
         self.register_to_config(
             latent_channels=latent_channels or channels,
-            block_out_channels=block_out_channels or diffusers_levels(config),
+            block_out_channels=block_out_channels or [channels] * scale.bit_length(),
             latents_mean=latents_mean or [0.0] * channels,
             latents_std=latents_std or [1.0] * channels,
         )
 
-    def encode(self, x: torch.Tensor) -> _Encoded:
-        """Encode to the raw latent (or the quantized one without a raw)."""
-        out = self.model.bottleneck(self.model.encode(x))
+    def _slot(self, slots: dict) -> torch.Tensor:
+        """The one tensor a diffusers caller exchanges."""
+        if len(slots) != 1:
+            raise ValueError(
+                f"diffusers callers take one tensor; this model has {list(slots)}"
+            )
+        return next(iter(slots.values()))
 
-        # diffusers callers read `.latent_dist.mean`; a vq has no raw, so z stands in
-        latent = out.z if out.raw is None else out.raw
-        return _Encoded(_Posterior(latent))
+    def encode(self, x: torch.Tensor) -> _Encoded:
+        """Encode to the continuous latent view (the mean of a kl, the input of a vq)."""
+        encoded = self.model.encode({self.model.domain.slots[0]: x})
+        return _Encoded(_Posterior(self._slot(self.model.latent.raw(encoded))))
 
     def decode(self, z: torch.Tensor) -> _Decoded:
-        """Decode a latent to the output signal."""
-        return _Decoded(self.model.head(self.model.decode(z)))
+        """Decode a decoder-input latent to the output signal."""
+        slots = {self.model.decoder.inputs[0]: z}
+        return _Decoded(self._slot(self.model.head(self.model.decoder(slots))))

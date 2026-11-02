@@ -1,6 +1,4 @@
-"""Latent views: `(x, z) -> (x', z')`, each decoded and reconstructed on its own."""
-
-import torch
+"""Latent views: `(x, latent) -> (x', latent')`, each decoded and reconstructed on its own."""
 
 from latentdragon_common.registry import Registry
 
@@ -15,6 +13,6 @@ class LatentView:
     domains: tuple[str, ...] = ("image", "video")
     weight = 1.0
 
-    def __call__(self, x: torch.Tensor, z: torch.Tensor, step: int) -> tuple:
-        """Return the transformed `(x, z)`; subclasses implement it."""
+    def __call__(self, x: dict, latent: dict, step: int) -> tuple[dict, dict]:
+        """Return the transformed data slots and latent; subclasses implement it."""
         raise NotImplementedError

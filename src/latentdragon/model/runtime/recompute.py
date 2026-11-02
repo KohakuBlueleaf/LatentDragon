@@ -5,8 +5,8 @@ from functools import partial
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
-from latentdragon.model.blocks import Block
-from latentdragon.model.compile import compile_wrapper
+from latentdragon.model.nn.blocks import Block
+from latentdragon.model.runtime.compile import compile_wrapper
 
 
 def _plain(forward):

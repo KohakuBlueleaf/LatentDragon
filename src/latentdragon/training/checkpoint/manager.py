@@ -10,6 +10,7 @@ import torch
 from safetensors import SafetensorError
 from safetensors.torch import load_file, save_file
 
+from latentdragon.io.state_keys import upgrade_keys
 from latentdragon.training.parallel import sync
 from latentdragon_common.log import get_logger
 
@@ -133,7 +134,7 @@ class CheckpointManager:
         payload = json.loads((path / "state.json").read_text(encoding="utf-8"))
 
         # Module weights, split back out by their name prefix.
-        tensors = load_file(str(path / "trainable.safetensors"))
+        tensors = upgrade_keys(load_file(str(path / "trainable.safetensors")), "model.")
         for name, module in modules.items():
             prefix = f"{name}."
             sub = {
@@ -150,7 +151,10 @@ class CheckpointManager:
         ema_path = path / "ema.safetensors"
         if ema_path.exists():
             ema.load_state_dict(
-                {"updates": payload["ema_updates"], "shadow": load_file(str(ema_path))}
+                {
+                    "updates": payload["ema_updates"],
+                    "shadow": upgrade_keys(load_file(str(ema_path))),
+                }
             )
 
         # This rank's RNG streams, when saved.

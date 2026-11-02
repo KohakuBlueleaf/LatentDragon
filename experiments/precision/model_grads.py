@@ -8,7 +8,6 @@ relative and absolute error, cosine, and a triage mark. Real compute.
     kogine run experiments/precision/model_grads.py --set RECIPE=ae/recipes/sdvae
 """
 
-import dataclasses
 import json
 from pathlib import Path
 
@@ -56,10 +55,10 @@ def knobs_of(**changes) -> dict:
 
 
 def part_of(name: str) -> str:
-    """The group a parameter reports under: the part, and the stage for the trunk."""
+    """The group a parameter reports under: the part, and the stage for the decoder."""
     pieces = name.split(".")
-    if pieces[0] == "trunk" and pieces[1] == "stages":
-        return f"trunk.{pieces[2]}"
+    if pieces[0] == "decoder" and pieces[1] == "stages":
+        return f"decoder.{pieces[2]}"
     return pieces[0]
 
 
@@ -86,10 +85,10 @@ def gradients(
     # Eval mode: fp64 and fp32 draw different noise, which would swamp the rounding
     model.eval()
     with torch.autocast("cuda", dtype=dtype, enabled=dtype is not None):
-        out = model.bottleneck(model.encode(x))
-        fake = model.head(model.decode(out.z))
-        nll, _ = task.objective(x, fake)
-        loss = nll + sum(out.aux.values(), torch.zeros((), device=x.device))
+        encoded = model.encode({"x": x})
+        fake = model.head(model.decode(encoded.latent))
+        nll, _ = task.objective({"x": x}, fake)
+        loss = nll + sum(encoded.losses.values(), torch.zeros((), device=x.device))
     scale = FP16_SCALE if dtype == torch.float16 else 1.0
     (loss * scale).backward()
 
@@ -111,7 +110,7 @@ def main() -> None:
     trained = {}
     if CHECKPOINT is not None:
         arch, live, _ = read_lightning(CHECKPOINT)
-        trained = {"ARCH": dataclasses.asdict(arch)}
+        trained = {"ARCH": arch}
 
     # Reference: eager kernels and everything in fp64
     reference = build_task(knobs_of(KERNELS="eager", **trained), DEVICE)

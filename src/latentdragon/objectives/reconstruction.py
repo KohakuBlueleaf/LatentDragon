@@ -1,47 +1,89 @@
-"""Reconstruction objective over a composed sensecraft loss."""
+"""Reconstruction objective: sensecraft losses per data slot."""
 
 import torch
 from sensecraft import Loss
-from torch import Tensor
+from torch import Tensor, nn
 
 from latentdragon_common.registry import Registry
 
 OBJECTIVE = Registry("objective")
-HEAD_OBJECTIVES = {"regression": "reconstruction"}
-DIMS = {"2d": 2, "3d": 3}
+
+
+def per_slot(loss_configs: list | dict, loss_dims: dict[str, int]) -> dict[str, list]:
+    """`{slot: terms}`; a plain list applies to the domain's only slot."""
+    if isinstance(loss_configs, dict):
+        unknown = set(loss_configs) - set(loss_dims)
+        if unknown:
+            raise KeyError(
+                f"LOSS_CONFIGS names slots {sorted(unknown)} the domain lacks"
+            )
+        return dict(loss_configs)
+    if len(loss_dims) != 1:
+        raise ValueError(
+            f"the domain has slots {sorted(loss_dims)}; give LOSS_CONFIGS per slot"
+        )
+    return {next(iter(loss_dims)): list(loss_configs)}
 
 
 @OBJECTIVE.register("reconstruction")
 class ReconstructionObjective:
-    """Weighted sensecraft terms of `(x, x_hat)`; the loss networks are frozen."""
+    """Weighted sensecraft terms of `(x[slot], x_hat[slot])`, summed over slots.
 
-    def __init__(self, loss_configs: list, mode: str = "2d"):
-        self.loss = (
-            Loss(list(loss_configs), dims=DIMS[mode]).requires_grad_(False).eval()
+    Term logs keep their sensecraft names for a single slot and become `<slot>/<term>` when
+    several slots are compared. The loss networks are frozen.
+    """
+
+    def __init__(self, loss_configs: list | dict, loss_dims: dict[str, int]):
+        terms = per_slot(loss_configs, loss_dims)
+        self.prefix = len(terms) > 1
+        self.loss = nn.ModuleDict(
+            {
+                slot: Loss(list(configs), dims=loss_dims[slot])
+                .requires_grad_(False)
+                .eval()
+                for slot, configs in terms.items()
+            }
         )
 
     def compile(self, **kwargs) -> None:
         """Compile every term that holds a network; parameter-free terms stay eager."""
-        for part in self.loss.parts.values():
-            if any(True for _ in part.parameters()):
-                part.compile(**kwargs)
+        for loss in self.loss.values():
+            for part in loss.parts.values():
+                if any(True for _ in part.parameters()):
+                    part.compile(**kwargs)
 
     def to(
         self, device, weights: torch.dtype | None = None
     ) -> "ReconstructionObjective":
         """Move the terms; `weights` holds the frozen feature nets in that dtype."""
-        self.loss.prepare(device, weights)
+        for loss in self.loss.values():
+            loss.prepare(device, weights)
         return self
 
-    def __call__(self, x: Tensor, x_hat: Tensor) -> tuple[Tensor, dict]:
-        """`(nll, term logs)` of the reconstruction `x_hat` of `x`."""
-        out = self.loss(x_hat, x)
-        logs = {name: value.detach() for name, value in out.terms.items()}
-        return out.total, {**logs, "loss": out.total.detach()}
+    def _name(self, slot: str, term: str) -> str:
+        return f"{slot}/{term}" if self.prefix else term
 
-    def seeded(
-        self, x: Tensor, x_hat: Tensor, scale: float
-    ) -> tuple[Tensor, Tensor, dict]:
-        """`(d nll / d x_hat, nll, term logs)`, with no graph kept through the loss nets."""
-        out = self.loss.value_and_seed(x_hat, x, scale)
-        return out.seed / scale, out.total, {**out.terms, "loss": out.total}
+    def __call__(self, x: dict, x_hat: dict) -> tuple[Tensor, dict]:
+        """`(nll, term logs)` of the reconstruction `x_hat` of `x`."""
+        total, logs = None, {}
+        for slot, loss in self.loss.items():
+            out = loss(x_hat[slot], x[slot])
+            logs.update({self._name(slot, k): v.detach() for k, v in out.terms.items()})
+            total = out.total if total is None else total + out.total
+        return total, {**logs, "loss": total.detach()}
+
+    def seeded(self, x: dict, x_hat: dict, scale: float) -> tuple[dict, Tensor, dict]:
+        """`(d nll / d x_hat per slot, nll, term logs)`, no graph kept through the nets.
+
+        A slot no loss reads gets a zero seed.
+        """
+        seeds, total, logs = {}, None, {}
+        for slot, value in x_hat.items():
+            if slot not in self.loss:
+                seeds[slot] = torch.zeros_like(value)
+                continue
+            out = self.loss[slot].value_and_seed(value, x[slot], scale)
+            seeds[slot] = out.seed / scale
+            logs.update({self._name(slot, k): v for k, v in out.terms.items()})
+            total = out.total if total is None else total + out.total
+        return seeds, total, {**logs, "loss": total}

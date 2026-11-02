@@ -9,10 +9,15 @@ from latentdragon.gan.scheme import (
     GAN_SCHEME,
     GanCtx,
     GanScheme,
+    added,
     composed_scalar,
+    detached,
+    leaf,
     recon_only,
+    scaled,
     seed_of,
 )
+from latentdragon.model.core import tree
 
 
 class Taming:
@@ -32,19 +37,21 @@ class Taming:
 
     def tracking_idle(self, ctx: GanCtx) -> dict:
         """Gated-off step that still feeds a stat-tracking critic."""
-        ctx.critic(ctx.m.fake.contiguous())
+        ctx.critic(ctx.m.fake)
         self._hold(ctx, None, None, None)
         if ctx.micro_index < ctx.micro_count - 1:
             return {}
         cached, self.cache = self.cache, []
         for index, (m, _, _, _) in enumerate(cached):
             ctx.backward_g(
-                composed_scalar(m, m.recon_seed / ctx.micro_count, ctx.micro_count),
+                composed_scalar(
+                    m, scaled(m.recon_seed, 1 / ctx.micro_count), ctx.micro_count
+                ),
                 final=index == len(cached) - 1,
             )
         for m, _, _, _ in cached:
-            ctx.critic(m.real.contiguous().detach())
-            ctx.critic(m.fake.contiguous().detach())
+            ctx.critic(detached(m.real))
+            ctx.critic(detached(m.fake))
         return {}
 
     def active(self, ctx: GanCtx) -> dict:
@@ -60,7 +67,7 @@ class Taming:
         g_loss, gan_seed, logits = self.fake_pass(ctx)
         if self.adaptive:
             self._accumulate_anchor(ctx, gan_seed)
-        self._hold(ctx, gan_seed.detach(), g_loss.detach(), logits)
+        self._hold(ctx, detached(gan_seed), g_loss.detach(), logits)
         if ctx.micro_index < micro_count - 1:
             return {}
 
@@ -72,7 +79,10 @@ class Taming:
             ctx.backward_g(
                 composed_scalar(
                     mm,
-                    mm.recon_seed / micro_count + (scale / micro_count) * seed,
+                    added(
+                        scaled(mm.recon_seed, 1 / micro_count),
+                        scaled(seed, scale / micro_count),
+                    ),
                     micro_count,
                 ),
                 final=index == len(cached) - 1,
@@ -86,12 +96,12 @@ class Taming:
 
     def _graph_fake_pass(self, ctx: GanCtx) -> tuple:
         """Critic forward on the live fake; returns `(g_loss, seed, None)`."""
-        g_loss = self.gen_loss(ctx.critic(ctx.m.fake.contiguous()))
+        g_loss = self.gen_loss(ctx.critic(ctx.m.fake))
         return g_loss, seed_of(g_loss, ctx.m.fake, ctx.seed_scale), None
 
     def _leaf_fake_pass(self, ctx: GanCtx) -> tuple:
         """Critic forward on a detached fake leaf; returns `(g_loss, seed, logits)`."""
-        fake = ctx.m.fake.detach().requires_grad_(True)
+        fake = leaf(ctx.m.fake)
         logits = ctx.critic(fake)
         g_loss = self.gen_loss(logits)
         seed = seed_of(g_loss, fake, ctx.seed_scale, retain_graph=True)
@@ -99,7 +109,7 @@ class Taming:
 
     @staticmethod
     def _fresh_fake_logits(ctx: GanCtx, micro, logits) -> torch.Tensor:
-        return ctx.critic(micro.fake.contiguous().detach())
+        return ctx.critic(detached(micro.fake))
 
     @staticmethod
     def _cached_fake_logits(ctx: GanCtx, micro, logits) -> torch.Tensor:
@@ -113,19 +123,19 @@ class Taming:
         """Add this micro's nll and gan gradients at the head anchor weight."""
         m, micro_count, last_w = ctx.m, ctx.micro_count, ctx.anchor
         scale = ctx.seed_scale
-        nll = torch.autograd.grad(
-            m.fake, last_w, grad_outputs=m.recon_seed * scale, retain_graph=True
-        )[0]
-        gan = torch.autograd.grad(
-            m.fake, last_w, grad_outputs=gan_seed * scale, retain_graph=True
-        )[0]
+        nll = tree.grad(
+            m.fake, last_w, grad_outputs=scaled(m.recon_seed, scale), retain_graph=True
+        )
+        gan = tree.grad(
+            m.fake, last_w, grad_outputs=scaled(gan_seed, scale), retain_graph=True
+        )
         self.nll_last = self.nll_last + nll.detach() / (micro_count * scale)
         self.gan_last = self.gan_last + gan.detach() / (micro_count * scale)
 
     def _adaptive_ratio(self, ctx: GanCtx) -> torch.Tensor:
         """Clipped ratio of nll to gan gradient norms across ranks (1 if off)."""
         if not self.adaptive:
-            return torch.ones((), device=ctx.m.fake.device)
+            return torch.ones((), device=tree.leaves(ctx.m.fake)[0].device)
 
         # One all-reduce for both anchor gradients
         both = ctx.sync.all_mean_(torch.stack([self.nll_last, self.gan_last]))
@@ -136,10 +146,10 @@ class Taming:
     def _critic_pass(self, ctx, cached, d_adaptive, scale) -> dict:
         """Critic backward over every cached micro; returns the step's GAN logs."""
         micro_count = ctx.micro_count
-        d_total = torch.zeros((), device=ctx.m.fake.device)
+        d_total = torch.zeros((), device=tree.leaves(ctx.m.fake)[0].device)
         real_mean, fake_mean = 0.0, 0.0
         for index, (mm, _, _, held) in enumerate(cached):
-            logits_real = ctx.critic(mm.real.contiguous().detach())
+            logits_real = ctx.critic(detached(mm.real))
             logits_fake = self.critic_fake(ctx, mm, held)
             real_mean = real_mean + logits_real.detach().mean() / micro_count
             fake_mean = fake_mean + logits_fake.detach().mean() / micro_count
@@ -193,5 +203,6 @@ def taming(
         policy.active,
         recon_only,
         retained_backward=True,
+        needs_anchor=adaptive_weight,
         policy=policy,
     )

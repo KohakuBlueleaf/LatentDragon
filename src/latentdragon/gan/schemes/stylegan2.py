@@ -9,6 +9,7 @@ from latentdragon.gan.scheme import (
     GanCtx,
     GanScheme,
     gen_backward,
+    scaled,
     seed_of,
 )
 from latentdragon.gan.schemes.shared import grad_penalty, leaf_forward
@@ -19,7 +20,7 @@ def _active(disc_weight: float, gamma: float, ctx: GanCtx) -> dict:
     real, fake, d_real, d_fake = leaf_forward(ctx)
     g_loss = F.softplus(-d_fake).mean()
     g_grad = seed_of(g_loss, fake, ctx.seed_scale, retain_graph=True)
-    gen_backward(ctx, (disc_weight / micro_count) * g_grad)
+    gen_backward(ctx, scaled(g_grad, disc_weight / micro_count))
 
     d_adv = F.softplus(-d_real).mean() + F.softplus(d_fake).mean()
     r1 = grad_penalty(d_real, real, ctx.seed_scale)

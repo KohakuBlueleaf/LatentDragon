@@ -1,4 +1,8 @@
-"""Decode strategies: how a latent becomes output when it may not fit at once."""
+"""Decode strategies: how a decoder input becomes output when it may not fit at once.
+
+Strategies work on a single-slot decoder and head through their slot-local `tensor` calls,
+plus the decoder capabilities each one names in `requires`.
+"""
 
 from collections.abc import Sequence
 
@@ -31,15 +35,19 @@ def spatial_overlap(model: Autoencoder, overlap: int | None, start: int = 0) -> 
 
 
 class DecodeStrategy:
-    """Latent to output; `requires` names the trunk methods the strategy calls."""
+    """Decoder input to output; `requires` names the decoder methods the strategy calls."""
 
     requires: tuple[str, ...] = ()
 
     def check(self, model: Autoencoder) -> None:
-        """Raise when the model lacks a required ability."""
-        missing = [name for name in self.requires if not hasattr(model.trunk, name)]
+        """Raise when the decoder or head lacks a required ability."""
+        for part in (model.decoder, model.head):
+            if not hasattr(part, "tensor"):
+                kind = type(part).__name__
+                raise ValueError(f"{kind} has no single-slot `tensor` call to tile")
+        missing = [name for name in self.requires if not hasattr(model.decoder, name)]
         if missing:
-            kind = type(model.trunk).__name__
+            kind = type(model.decoder).__name__
             raise ValueError(f"{kind} cannot do this decode; needs {missing}")
 
     def __call__(
@@ -56,7 +64,7 @@ class FullDecode(DecodeStrategy):
         self, model: Autoencoder, z: Tensor, has_keyframe: bool = True
     ) -> Tensor:
         frames = {"has_keyframe": has_keyframe} if is_video(z) else {}
-        return model.head(model.trunk(z, **frames))
+        return model.head.tensor(model.decoder.tensor(z, **frames))
 
 
 @DECODE.register("tiled")
@@ -100,13 +108,13 @@ class TiledDecode(DecodeStrategy):
             z,
             self.tile,
             overlap,
-            model.trunk.spatial_scale,
+            model.decoder.spatial_scale,
             lambda part, _: self.inner(model, part, has_keyframe),
         )
 
     def _over_time(self, model: Autoencoder, z: Tensor, has_keyframe: bool) -> Tensor:
         """Decode spans of latent frames and keep the frames past each span's context."""
-        scale = model.trunk.temporal_scale
+        scale = model.decoder.temporal_scale
         overlap = self.overlap_t
         if overlap is None:
             overlap = model.reach().temporal
@@ -134,7 +142,7 @@ class StagedTiledDecode(DecodeStrategy):
     stage `stages`, None for the model's reach.
     """
 
-    requires = ("forward_early", "forward_late")
+    requires = ("forward_early", "forward_late", "scales")
 
     def __init__(
         self,
@@ -150,12 +158,12 @@ class StagedTiledDecode(DecodeStrategy):
         self, model: Autoencoder, z: Tensor, has_keyframe: bool = True
     ) -> Tensor:
         frames = {"has_keyframe": has_keyframe} if is_video(z) else {}
-        trunk = model.trunk
-        early = trunk.forward_early(z, self.stages, **frames)
+        decoder = model.decoder
+        early = decoder.forward_early(z, self.stages, **frames)
 
         # The late stages' own scale, since the tiles live on their input grid
         scale = 1
-        for value in trunk.scales[self.stages :]:
+        for value in decoder.scales[self.stages :]:
             scale *= value
 
         return stitch(
@@ -163,5 +171,7 @@ class StagedTiledDecode(DecodeStrategy):
             self.tile,
             spatial_overlap(model, self.overlap, self.stages),
             scale,
-            lambda part, _: model.head(trunk.forward_late(part, self.stages, **frames)),
+            lambda part, _: model.head.tensor(
+                decoder.forward_late(part, self.stages, **frames)
+            ),
         )

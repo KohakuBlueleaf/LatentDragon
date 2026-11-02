@@ -12,9 +12,8 @@ from pathlib import Path
 import torch
 from kohakuengine import load_config_file
 
-from latentdragon.io.arch_json import arch_from_json
-from latentdragon.model import AEArchConfig, build_autoencoder
-from latentdragon.model.blocks import Block
+from latentdragon.model import build_autoencoder
+from latentdragon.model.nn.blocks import Block
 
 ARCH_FILE: Path = Path("configs/ae/arch/sdvae.py")
 DEVICE: str = "cuda:0"
@@ -54,9 +53,9 @@ class LayerClock:
         return stop
 
 
-def arch_of(path: Path, **changes) -> AEArchConfig:
-    """The `ARCH` of an arch config file, with fields replaced by `changes`."""
-    return arch_from_json({**load_config_file(path).globals_dict["ARCH"], **changes})
+def arch_of(path: Path, **changes) -> dict:
+    """The `ARCH` of an arch config file, with parts replaced by `changes`."""
+    return {**load_config_file(path).globals_dict["ARCH"], **changes}
 
 
 def inputs_of(model, x: torch.Tensor) -> dict:
@@ -73,7 +72,7 @@ def inputs_of(model, x: torch.Tensor) -> dict:
         if isinstance(m, Block)
     ]
     with torch.no_grad(), torch.autocast("cuda", dtype=DTYPE):
-        model.bottleneck(model.encode(x))
+        model.encode({"x": x})
     for handle in handles:
         handle.remove()
     return seen

@@ -10,7 +10,6 @@ from safetensors.torch import save_file
 
 from latentdragon.io.legacy_hparams import from_legacy_hparams, to_legacy_hparams
 from latentdragon.io.legacy_keys import from_legacy, split_lightning, to_legacy
-from latentdragon.model import AEArchConfig
 
 
 class _Placeholder:
@@ -40,6 +39,12 @@ class tolerant_pickle:
     load = staticmethod(pickle.load)
 
 
+def _conv_decoder(arch: dict) -> bool:
+    """Whether the decoder is the SD-VAE family, whose legacy head is `conv_out`."""
+    decoder = arch["decoder"]
+    return (decoder if isinstance(decoder, str) else decoder["name"]) == "sdvae"
+
+
 def load_lightning(path: str | Path) -> dict:
     """Read a trusted Lightning `.ckpt`; pickled code runs, so only use your own."""
     return torch.load(
@@ -47,7 +52,7 @@ def load_lightning(path: str | Path) -> dict:
     )
 
 
-def read_lightning(path: str | Path) -> tuple[AEArchConfig, dict, dict]:
+def read_lightning(path: str | Path) -> tuple[dict, dict, dict]:
     """`(arch, live_state, ema_state)` in the new layout."""
     checkpoint = load_lightning(path)
     live, ema = split_lightning(checkpoint["state_dict"])
@@ -55,7 +60,7 @@ def read_lightning(path: str | Path) -> tuple[AEArchConfig, dict, dict]:
     return arch, from_legacy(live), from_legacy(ema) if ema else {}
 
 
-def read_safetensors(path: str | Path) -> tuple[AEArchConfig, dict]:
+def read_safetensors(path: str | Path) -> tuple[dict, dict]:
     """`(arch, state)` from a legacy safetensors export."""
     with safe_open(str(path), framework="pt") as handle:
         metadata = json.loads(handle.metadata()["config"])
@@ -63,21 +68,21 @@ def read_safetensors(path: str | Path) -> tuple[AEArchConfig, dict]:
     return from_legacy_hparams(metadata), from_legacy(state)
 
 
-def write_safetensors(path: str | Path, arch: AEArchConfig, state: dict) -> None:
+def write_safetensors(path: str | Path, arch: dict, state: dict) -> None:
     """A safetensors file the research `tokenizer` and `statedict_to_model` read."""
     hparams = to_legacy_hparams(arch)
     metadata = dict(hparams)
     metadata.pop("variational")
     metadata["enc_class"] = "latentmaid.model.Encoder"
     metadata["dec_class"] = "latentmaid.model.Decoder"
-    legacy = to_legacy(_cpu(state), arch.trunk == "conv")
+    legacy = to_legacy(_cpu(state), _conv_decoder(arch))
     save_file(legacy, str(path), metadata={"config": json.dumps(metadata)})
 
 
-def write_lightning(path: str | Path, arch: AEArchConfig, state: dict) -> None:
+def write_lightning(path: str | Path, arch: dict, state: dict) -> None:
     """A minimal `.ckpt` for `LatentMaid.load_from_checkpoint(strict=False)`."""
     hparams = to_legacy_hparams(arch)
-    legacy = to_legacy(_cpu(state), arch.trunk == "conv")
+    legacy = to_legacy(_cpu(state), _conv_decoder(arch))
     weights = {
         ("vq_handler." + k if k.startswith("vq.") else k): v for k, v in legacy.items()
     }

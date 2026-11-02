@@ -45,8 +45,9 @@ class ModernPatchGAN(Critic):
         norm: str | None = "rms",
         act: str = "silu",
         use_spectral_norm: bool = False,
+        slot: str = "x",
     ):
-        super().__init__()
+        super().__init__(slot)
         kw, padw = 4, 1
         self.tracks_stats = use_spectral_norm
         act_cls = {"silu": nn.SiLU, "mish": nn.Mish}[act]
@@ -73,5 +74,5 @@ class ModernPatchGAN(Critic):
         blocks.append(wrap(nn.Conv2d(ndf * mult, 1, kw, 1, padw)))
         self.main = nn.Sequential(*blocks)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def judge(self, x: torch.Tensor) -> torch.Tensor:
         return self.main(x)

@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
 
-from latentdragon.model.blocks import build_block
-from latentdragon.model.layers import AttnBlock
+from latentdragon.model.nn.blocks import build_block
+from latentdragon.model.nn.layers import AttnBlock
 
 
 @dataclass(frozen=True)

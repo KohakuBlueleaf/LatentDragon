@@ -3,8 +3,8 @@
 import torch
 from torch import Tensor, nn
 
-from latentdragon.bottleneck.base import BOTTLENECK, Bottleneck
-from latentdragon.types import BottleneckOut
+from latentdragon.model.core.contracts import LATENT, Encoded
+from latentdragon.model.latents.base import TensorLatent
 
 
 def kl_standard_normal(mean: Tensor, logvar: Tensor) -> Tensor:
@@ -13,28 +13,30 @@ def kl_standard_normal(mean: Tensor, logvar: Tensor) -> Tensor:
     return kl.flatten(1).sum(dim=1).mean()
 
 
-@BOTTLENECK.register("kl")
-class KLBottleneck(Bottleneck):
-    """Split the encoder output into mean and logvar, sample while training."""
+@LATENT.register("kl")
+class KLLatent(TensorLatent):
+    """Split the encoder slot into mean and logvar along dim 1, sample while training.
+
+    The encoder emits twice the latent channels; the latent is the sample, or the mean in
+    eval mode, and the KL is the `kl` loss.
+    """
 
     def __init__(
         self,
-        latent_dim: int | None = None,
+        input: str = "h",
+        output: str = "z",
         logvar_clamp: tuple[float, float] = (-30.0, 20.0),
     ):
-        super().__init__()
+        super().__init__(input, output)
         self.logvar_clamp = logvar_clamp
 
-    def in_channels(self, latent_dim: int) -> int:
-        """Mean and logvar."""
-        return 2 * latent_dim
-
-    def init_encoder_out(self, layer: nn.Module, latent_dim: int) -> None:
+    def init_from_encoder(self, layer: nn.Module) -> None:
         """Zero the logvar half of a layer whose outputs are at weight dim 0."""
-        layer.weight.data[latent_dim:].zero_()
-        layer.bias.data[latent_dim:].zero_()
+        half = layer.weight.shape[0] // 2
+        layer.weight.data[half:].zero_()
+        layer.bias.data[half:].zero_()
 
-    def forward(self, raw: Tensor, offset: int = 0) -> BottleneckOut:
+    def encode(self, raw: Tensor, offset: int) -> Encoded:
         """Sample the posterior while training, else use the mean; report the KL."""
         # Split the channels into mean and clamped logvar
         mean, logvar = raw.chunk(2, dim=1)
@@ -46,4 +48,4 @@ class KLBottleneck(Bottleneck):
             z = mean + (0.5 * logvar).exp() * torch.randn_like(mean)
 
         kl = kl_standard_normal(mean, logvar)
-        return BottleneckOut(z=z, aux={"kl": kl}, metrics={"kl": kl.detach()}, raw=mean)
+        return Encoded(latent={self.output: z}, losses={"kl": kl}, extras={"raw": mean})

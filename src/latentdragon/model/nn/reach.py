@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import torch.nn as nn
 
-from latentdragon.model.layers import AttnBlock
+from latentdragon.model.nn.layers import AttnBlock
 
 # These read every position of the input, so no finite overlap is exact
 NONLOCAL = (AttnBlock, nn.GroupNorm)

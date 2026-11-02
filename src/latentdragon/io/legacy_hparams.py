@@ -1,8 +1,8 @@
-"""Hparams conversion between legacy configs and `AEArchConfig`."""
+"""Hparams conversion between legacy configs and `ARCH`, through the flat arch fields."""
 
 from typing import Any
 
-from latentdragon.model import AEArchConfig
+from latentdragon.io.arch_json import flat_fields, upgrade_arch
 
 NORMS = {
     "latentmaid.model.modules.RMSNorm": "rms",
@@ -49,13 +49,13 @@ def _norm(name: Any) -> str:
     return NORMS[name] if name in NORMS else "rms"
 
 
-def _blocks(config: dict) -> tuple:
-    return tuple(tuple(row) for row in config["block_configs"])
+def _blocks(config: dict) -> list:
+    return [list(row) for row in config["block_configs"]]
 
 
-def _attn(config: dict) -> tuple | None:
+def _attn(config: dict) -> list | None:
     value = config.get("attn_block_configs")
-    return tuple(value) if value else None
+    return list(value) if value else None
 
 
 def _refuse_active(config: dict, label: str) -> None:
@@ -119,13 +119,13 @@ def _bottleneck(hparams: dict) -> Any:
     }
 
 
-def from_legacy_hparams(hparams: dict) -> AEArchConfig:
-    """An `AEArchConfig` from a checkpoint's `hyper_parameters`."""
+def from_legacy_hparams(hparams: dict) -> dict:
+    """An `ARCH` from a checkpoint's `hyper_parameters`."""
     enc, dec = hparams["enc_config"], hparams["dec_config"]
     _refuse_active(enc, "enc_config")
     _refuse_active(dec, "dec_config")
     video = bool(hparams.get("is_video", False))
-    return AEArchConfig(
+    flat = dict(
         domain="video" if video else "image",
         image_dim=enc.get(
             "image_dim", enc.get("input_dim", dec.get("out_channels", 3))
@@ -141,13 +141,14 @@ def from_legacy_hparams(hparams: dict) -> AEArchConfig:
         trunk_attn=_attn(dec),
         trunk_norm=_norm(dec.get("norm_layer")),
     )
+    return upgrade_arch(flat)
 
 
-def _legacy_config(blocks, attn, norm, cfg: AEArchConfig, variational: bool) -> dict:
-    """One legacy `enc_config` or `dec_config` dict."""
+def _legacy_config(blocks, attn, norm, cfg: dict, variational: bool) -> dict:
+    """One legacy `enc_config` or `dec_config` dict from the flat fields `cfg`."""
     config = {
-        "image_dim": cfg.image_dim,
-        "latent_dim": cfg.latent_dim,
+        "image_dim": cfg["image_dim"],
+        "latent_dim": cfg["latent_dim"],
         "block_configs": [list(row) for row in blocks],
         "norm_layer": LEGACY_NORMS[norm],
     }
@@ -162,23 +163,30 @@ def _name(spec: Any) -> str:
     return spec if isinstance(spec, str) else spec["name"]
 
 
-def to_legacy_hparams(cfg: AEArchConfig) -> dict:
+def to_legacy_hparams(arch: dict) -> dict:
     """`enc_config`, `dec_config` and VQ fields of the legacy layout."""
-    name = _name(cfg.bottleneck)
-    nested = cfg.bottleneck if name == "nested" else None
+    cfg = flat_fields(arch)
+    name = _name(cfg["bottleneck"])
+    nested = cfg["bottleneck"] if name == "nested" else None
     if nested is not None:
         name = _name(nested["inner"])
     variational = name == "kl"
     enc = _legacy_config(
-        cfg.encoder_blocks, cfg.encoder_attn, cfg.encoder_norm, cfg, variational
+        cfg["encoder_blocks"],
+        cfg["encoder_attn"],
+        cfg["encoder_norm"],
+        cfg,
+        variational,
     )
-    enc["encoder_type"] = cfg.encoder
-    dec = _legacy_config(cfg.trunk_blocks, cfg.trunk_attn, cfg.trunk_norm, cfg, False)
-    dec["decoder_type"] = cfg.trunk
+    enc["encoder_type"] = cfg["encoder"]
+    dec = _legacy_config(
+        cfg["trunk_blocks"], cfg["trunk_attn"], cfg["trunk_norm"], cfg, False
+    )
+    dec["decoder_type"] = cfg["trunk"]
     out = {
         "enc_config": enc,
         "dec_config": dec,
-        "is_video": cfg.domain == "video",
+        "is_video": cfg["domain"] == "video",
         "variational": variational,
     }
     if nested is not None and name == "vq":
@@ -189,7 +197,7 @@ def to_legacy_hparams(cfg: AEArchConfig) -> dict:
         out["latent_chs"] = list(nested["latent_chs"])
         out["latent_chs_ratio"] = nested.get("ratio")
     if name == "vq":
-        vq = nested["inner"] if nested is not None else cfg.bottleneck
+        vq = nested["inner"] if nested is not None else cfg["bottleneck"]
         spec = dict(vq["quantizer"])
         out["vq_mode"] = spec.pop("name")
         if spec.get("partition_mode") == "shared":

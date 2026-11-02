@@ -38,8 +38,6 @@ CUDNN_BENCHMARK = True
 
 # Optimizer, schedule and EMA
 LR = 0.000192
-ENC_LR_SCALE = 1.0
-VQ_LR_SCALE = 1.0
 BETAS = (0.5, 0.9)
 WEIGHT_DECAY = 0.0
 SCHEDULER_CONFIG = {"mode": "constant", "min_value": 0.01, "warmup": 0, "end": -1}

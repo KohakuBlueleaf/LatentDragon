@@ -3,6 +3,7 @@
 import torch
 
 from latentdragon.latent.context import LatentCtx
+from latentdragon.model.core import tree
 from latentdragon_common.registry import Registry
 
 LATENT_TERM = Registry("latent term")
@@ -57,9 +58,7 @@ class AdaptiveWeight:
     def __call__(self, loss: torch.Tensor, ctx: LatentCtx, anchor) -> float:
         # Gradients of the term and of the reconstruction at the anchor
         term = torch.autograd.grad(loss, anchor, retain_graph=True)[0]
-        recon = torch.autograd.grad(
-            ctx.fake, anchor, grad_outputs=ctx.seed, retain_graph=True
-        )[0]
+        recon = tree.grad(ctx.fake, anchor, grad_outputs=ctx.seed, retain_graph=True)
 
         ratio = recon.float().norm() / (term.float().norm() + 1e-4)
         return self.weight * ratio.clamp(*self.clip).detach()

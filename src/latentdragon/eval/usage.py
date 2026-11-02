@@ -4,7 +4,7 @@ import torch
 
 
 class NoTally:
-    """The tally of a bottleneck with no codes."""
+    """The tally of a latent def with no codes."""
 
     def add(self, indices) -> None:
         return None
@@ -16,8 +16,8 @@ class NoTally:
 class CodeTally:
     """Per-slot code counts; a slot is one (level, partition) pair of the grid."""
 
-    def __init__(self, bottleneck, device):
-        self.quantizer = bottleneck.quantizer
+    def __init__(self, latent, device):
+        self.quantizer = latent.quantizer
         self.counts = torch.zeros(
             self.quantizer.rvq_levels,
             self.quantizer.partitions,

@@ -1,6 +1,5 @@
 """`run(globals(), __file__)`: validate, spawn, assemble and drive one run."""
 
-import dataclasses
 import functools
 import os
 import socket
@@ -16,8 +15,8 @@ import torch.multiprocessing as mp
 from latentdragon.domain import DOMAIN
 from latentdragon.eval import ReconEvaluator
 from latentdragon.model import build_autoencoder
+from latentdragon.model.core import tree
 from latentdragon.training.build.assemble import (
-    arch_config,
     build_bundles,
     build_ema,
     build_task,
@@ -81,33 +80,21 @@ def check(knobs: dict, script: str) -> None:
     """Report every config problem at once, before any device work."""
     problems = unknown_problems(set(knobs), script_knobs(script))
     try:
-        arch = arch_config(knobs)
-    except (KeyError, TypeError) as err:
+        with torch.device("meta"):
+            model = build_autoencoder(knobs["ARCH"])
+    except (KeyError, TypeError, ValueError, AttributeError, ImportError) as err:
         raise_problems([*problems, f"ARCH: {err}"])
-    derived = dataclasses.asdict(arch)
-    view = {
-        **knobs,
-        "DOMAIN": derived["domain"],
-        "HEAD": derived["head"],
-        "BOTTLENECK": derived["bottleneck"],
-        "TRUNK": derived["trunk"],
-    }
-    problems += all_problems(view)
-    problems += freeze_problems(arch, knobs["FREEZE"])
+    problems += all_problems(knobs, model)
+    problems += freeze_problems(model, knobs["FREEZE"])
     if knobs["RESUME"] is not None:
         problems += drift_problems(resolve_run(knobs), knobs)
     raise_problems(problems)
-    for note in compile_notes(view):
+    for note in compile_notes(knobs, model):
         log.warning("compile", note=note)
 
 
-def freeze_problems(arch, paths: list[str]) -> list[str]:
-    """`FREEZE` paths that name no submodule, from a meta-device build."""
-    try:
-        with torch.device("meta"):
-            model = build_autoencoder(arch)
-    except (KeyError, TypeError, ValueError, AttributeError, ImportError) as err:
-        return [f"ARCH: {err}"]
+def freeze_problems(model, paths: list[str]) -> list[str]:
+    """`FREEZE` paths that name no submodule of the model."""
     problems = []
     for path in paths:
         try:
@@ -224,7 +211,7 @@ def _callbacks(k, task, bundles, ema, manager, metric_log, env) -> list:
 
     if k["SAMPLE_EVERY"] > 0 and rank == 0:
         # Sample grids reuse the first (up to) 8 training items as a fixed batch.
-        held = torch.stack([source[i] for i in range(min(8, len(source)))])
+        held = tree.stack([source[i] for i in range(min(8, len(source)))])
         device_type = torch.device(device).type
         callbacks.append(
             SampleCallback(
@@ -265,7 +252,7 @@ def worker(rank: int, world: int, k: dict, script: str = "") -> None:
     device, run_dir = _start(rank, world, k)
 
     # Data, task, optimizers and EMA.
-    domain = build(arch_config(k).domain, DOMAIN)
+    domain = build(k["ARCH"].get("domain", "image"), DOMAIN)
     precision = build(k["PRECISION"], PRECISION)
     source = _sources(k["TRAIN_SOURCES"], domain, k["SIZE"], True)
     steps = total_steps(k, len(source), world)

@@ -5,13 +5,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_LINES = 1000
-SOURCE_DIRS = ("src", "scripts", "checks", "configs", "experiments")
+SOURCE_DIRS = ("src", "scripts", "checks", "configs", "experiments", "examples")
 ALLOWED_IMPORTS = {
     "latentdragon_common": ("latentdragon_common",),
     "latentdragon_kernels": ("latentdragon_common", "latentdragon_kernels"),
     "latentdragon_data": ("latentdragon_common", "latentdragon_data"),
 }
-PURE_PACKAGES = ("latentdragon.model", "latentdragon.vq", "latentdragon.bottleneck")
+PURE_PACKAGES = ("latentdragon.model", "latentdragon.vq")
 
 
 def python_files(dirs: tuple[str, ...] = SOURCE_DIRS) -> list[Path]:
@@ -69,7 +69,7 @@ def direction_problems(package: str, imports: set[str]) -> list[str]:
         ):
             problems.append(f"{package} imports {name}")
 
-        # model, vq and bottleneck stay free of training
+        # model and vq stay free of training
         if package.startswith(PURE_PACKAGES) and name.startswith(
             "latentdragon.training"
         ):

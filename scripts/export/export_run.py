@@ -6,9 +6,9 @@ kogine run scripts/export/export_run.py --set CHECKPOINT=... --set FORM=native
 import json
 from pathlib import Path
 
+from latentdragon.io.arch_json import upgrade_arch
 from latentdragon.io.export import save_diffusers, save_export
 from latentdragon.io.legacy import write_lightning, write_safetensors
-from latentdragon.training.build.assemble import arch_config
 from latentdragon.training.checkpoint.partial import checkpoint_weights
 
 CHECKPOINT = ""  # a checkpoints/step_XXXXXXXX folder
@@ -23,7 +23,7 @@ def main():
     """Load the checkpoint's weights and write them in the chosen FORM."""
     folder = Path(CHECKPOINT)
     config = json.loads((folder.parents[1] / "config.json").read_text("utf-8"))
-    arch = arch_config(config)
+    arch = upgrade_arch(config["ARCH"])
     state = checkpoint_weights(folder, USE_EMA)
     match FORM:
         case "native":

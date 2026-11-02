@@ -15,14 +15,26 @@ from latentdragon_common.knobs import supplied_knobs
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts" / "train" / "ae.py"
 TINY_ARCH = {
-    "latent_dim": 4,
-    "encoder": "conv",
-    "encoder_blocks": ((2, 8, 1),),
-    "encoder_attn": None,
-    "trunk": "conv",
-    "trunk_blocks": ((2, 8, 1),),
-    "trunk_attn": None,
-    "bottleneck": {"name": "vq", "quantizer": {"name": "kohaku", "n_embed": 8}},
+    "encoder": {
+        "name": "sdvae",
+        "out_channels": 4,
+        "stages": [[2, 8, 1]],
+        "norm": "rms",
+    },
+    "latent": {"name": "vq", "dim": 4, "quantizer": {"name": "kohaku", "n_embed": 8}},
+    "decoder": {
+        "name": "sdvae",
+        "in_channels": 4,
+        "stages": [[2, 8, 1]],
+        "norm": "rms",
+    },
+    "head": {
+        "name": "conv",
+        "in_channels": 8,
+        "kernel_size": 3,
+        "norm": "rms",
+        "act": "mish",
+    },
 }
 TINY_CRITIC = {"name": "modern_patchgan", "ndf": 4, "n_layers": 1}
 
