@@ -51,6 +51,22 @@ class Bundle:
             for index, group in enumerate(self.optimizer.param_groups)
         }
 
+    def _group_norms(self) -> dict[str, Tensor]:
+        """The unclipped gradient norm of each named group, when there are several."""
+        groups = self.optimizer.param_groups
+        if len(groups) < 2:
+            return {}
+        out = {}
+        for index, group in enumerate(groups):
+            grads = [p.grad for p in group["params"] if p.grad is not None]
+            if grads:
+                norms = torch._foreach_norm(grads, 2.0, dtype=torch.float32)
+                key = (
+                    f"optim/grad_norm/{self.name}/{group.get('name', f'group{index}')}"
+                )
+                out[key] = torch.linalg.vector_norm(torch.stack(norms))
+        return out
+
     def step(self) -> dict[str, Tensor]:
         """Reduce, unscale, clip, step or skip, update scale, advance the schedule."""
         # A bundle with no gradient this step only advances its schedule
@@ -59,8 +75,9 @@ class Bundle:
             self.schedule.step()
             return self._learning_rates()
 
-        # Undo loss scaling, then clip to the norm limit
+        # Undo loss scaling, note each group's norm, then clip to the norm limit
         self.scaler.unscale(grads)
+        group_norms = self._group_norms()
         norm = clip_tensors(grads, self.clip)
 
         # The learning rate each group steps with, and the scale this step's loss was under
@@ -76,6 +93,7 @@ class Bundle:
         self.optimizer.zero_grad(set_to_none=True)
 
         logs[f"optim/grad_norm/{self.name}"] = norm.detach()
+        logs.update(group_norms)
         logs[f"optim/skipped/{self.name}"] = bad
         return logs
 
