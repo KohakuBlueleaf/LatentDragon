@@ -49,7 +49,8 @@ def flat_state(modules: dict[str, torch.nn.Module]) -> dict[str, torch.Tensor]:
 
 def save_tensors(tensors: dict[str, torch.Tensor], path: Path) -> None:
     """Write tensors with their fp32 or integer dtype preserved."""
-    save_file(tensors, str(path))
+    plain = {key: value.contiguous() for key, value in tensors.items()}
+    save_file(plain, str(path))
 
 
 def rng_state() -> dict:

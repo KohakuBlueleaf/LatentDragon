@@ -28,16 +28,19 @@ class NamedEMA:
         self.named = named
         self.decay = decay
         self.updates = 0
-        self.shadow = {k: p.detach().clone() for k, p in named.items()}
+        self.shadow = {k: p.detach().float().clone() for k, p in named.items()}
         self._live = list(named.values())
         self._copies = [self.shadow[k] for k in named]
+        self._widen = any(p.dtype != torch.float32 for p in self._live)
 
     @torch.no_grad()
     def update(self) -> None:
         """Advance every shadow toward its live parameter."""
         self.updates += 1
         decay = min(self.decay, (1 + self.updates) / (10 + self.updates))
-        torch._foreach_lerp_(self._copies, self._live, 1.0 - decay)
+        # Shadows stay fp32: a small decay step would round away in 16 bits
+        live = [p.float() for p in self._live] if self._widen else self._live
+        torch._foreach_lerp_(self._copies, live, 1.0 - decay)
 
     @contextlib.contextmanager
     def swapped(self):

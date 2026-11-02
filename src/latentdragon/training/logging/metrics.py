@@ -37,18 +37,21 @@ class MetricLog:
         tensors = [v.detach().float().reshape(()) for _, _, v in cells if _is_tensor(v)]
 
         # Mean across ranks and start the async host copy; read at the next emit.
-        pack = None
+        pack, done = None, None
         if tensors:
             pack = sync.all_mean_(torch.stack(tensors)).to("cpu", non_blocking=True)
             self._device = tensors[0].device
-        self._staged = (rows, cells, pack)
+            done = _copy_event(self._device)
+        self._staged = (rows, cells, pack, done)
 
     def _emit(self) -> None:
         """Write the staged rows to every sink, reading tensor cells from the host copy."""
         if self._staged is None:
             return
-        rows, cells, pack = self._staged
+        rows, cells, pack, done = self._staged
         self._staged = None
+        if done is not None:
+            done.synchronize()
 
         # Rebuild rows, taking tensor cells from the packed values in order.
         out = [{"step": step} for step, _ in rows]
@@ -68,6 +71,15 @@ class MetricLog:
         self._emit()
         for sink in self.sinks:
             sink.close()
+
+
+def _copy_event(device: torch.device) -> torch.cuda.Event | None:
+    """An event that fires once the queued host copy on `device` has landed."""
+    if device.type != "cuda":
+        return None
+    event = torch.cuda.Event()
+    event.record()
+    return event
 
 
 def _is_tensor(value) -> bool:

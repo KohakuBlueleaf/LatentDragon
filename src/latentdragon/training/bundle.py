@@ -1,14 +1,16 @@
 """`Bundle`: one network's optimizer, schedule, scaler, clip and reducer."""
 
-from collections.abc import Callable
-
 import torch
-from torch.nn.utils import clip_grad_norm_
+from torch import Tensor
 
 
-def norm_only(params: list, limit: float) -> torch.Tensor:
-    """The pre-clip norm with clipping selected off."""
-    return clip_grad_norm_(params, float("inf"))
+def clip_tensors(grads: list[Tensor], limit: float) -> Tensor:
+    """The fp32 global norm of `grads`, scaled down to `limit` when `limit` is positive."""
+    norms = torch._foreach_norm(grads, 2.0, dtype=torch.float32)
+    total = torch.linalg.vector_norm(torch.stack(norms))
+    if limit > 0:
+        torch._foreach_mul_(grads, (limit / (total + 1e-6)).clamp(max=1.0))
+    return total
 
 
 class Bundle:
@@ -21,42 +23,47 @@ class Bundle:
         self.scaler = scaler
         self.reducer = reducer
         self.clip = clip
-        self._clip: Callable = clip_grad_norm_ if clip > 0 else norm_only
+        self.device_skip = bool(optimizer.defaults.get("fused"))
 
     def params(self) -> list[torch.nn.Parameter]:
         """Every parameter this bundle updates."""
         return [p for g in self.optimizer.param_groups for p in g["params"]]
 
-    def backward(self, scalar: torch.Tensor, retain_graph: bool = False) -> None:
-        """Backward through this bundle's own scaler."""
+    def backward(
+        self, scalar: Tensor, retain_graph: bool = False, final: bool = False
+    ) -> None:
+        """Backward through this bundle's own scaler; `final` marks the step's last one."""
+        self.reducer.arm(final)
         self.scaler.scale(scalar).backward(retain_graph=retain_graph)
 
-    def step(self) -> dict[str, float]:
+    def _apply(self, bad: Tensor) -> None:
+        """Step unless `bad`: on the device for a fused optimizer, else with a host read."""
+        if self.device_skip:
+            self.optimizer.found_inf = bad
+            self.optimizer.step()
+        elif not bad.item():
+            self.optimizer.step()
+
+    def step(self) -> dict[str, Tensor]:
         """Reduce, unscale, clip, step or skip, update scale, advance the schedule."""
-        # A bundle with no gradient this step only advances its schedule.
-        with_grad = [p for p in self.params() if p.grad is not None]
-        if not with_grad:
+        # A bundle with no gradient this step only advances its schedule
+        grads = self.reducer.finish()
+        if not grads:
             self.schedule.step()
             return {}
 
-        # Average across ranks, undo loss scaling, then clip to the norm limit.
-        grads = [p.grad for p in with_grad]
-        self.reducer.reduce(grads)
+        # Undo loss scaling, then clip to the norm limit
         self.scaler.unscale(grads)
-        norm = self._clip(with_grad, self.clip)
+        norm = clip_tensors(grads, self.clip)
 
-        # A non-finite norm skips the optimizer step and backs the scale off.
-        finite = bool(torch.isfinite(norm))
-        if finite:
-            self.optimizer.step()
-        self.scaler.update(finite)
+        # A non-finite norm skips the step and backs the scale off
+        bad = (~torch.isfinite(norm)).to(torch.float32)
+        self._apply(bad)
+        self.scaler.update(bad)
         self.schedule.step()
         self.optimizer.zero_grad(set_to_none=True)
 
-        return {
-            f"grad_norm/{self.name}": norm.detach(),
-            f"skipped/{self.name}": not finite,
-        }
+        return {f"grad_norm/{self.name}": norm.detach(), f"skipped/{self.name}": bad}
 
     def state_dict(self) -> dict:
         """Optimizer, schedule and scaler state."""
