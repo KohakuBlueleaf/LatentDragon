@@ -121,6 +121,12 @@ class WandbSink:
         """Upload one sample grid at `step`."""
         self.run.log({key: wandb.Image(str(path)), STEP_KEY: step})
 
+    def summary(self, totals: dict, path: Path) -> None:
+        """Parameter totals as `model/` summary values, and the table file."""
+        for key, value in totals.items():
+            self.run.summary[f"model/{key}"] = value
+        self.run.save(str(path), base_path=str(Path(path).parent), policy="now")
+
     def watch(self, model, every: int) -> None:
         """Gradient and parameter histograms of `model` every `every` steps."""
         self.run.watch(model, log="all", log_freq=every)

@@ -38,6 +38,7 @@ from latentdragon.training.logging.sinks import (
     ProgressBar,
     WandbSink,
 )
+from latentdragon.training.logging.summary import summarize
 from latentdragon.training.parallel import sync
 from latentdragon.training.precision import PRECISION
 from latentdragon.training.run_dir import (
@@ -180,6 +181,17 @@ def _sinks(k: dict, run_dir, rank: int, script: str) -> list:
     return [sink for sink in sinks if sink is not None]
 
 
+def _summary(k, task, run_dir, sinks) -> None:
+    """Print the module summary, keep it in the run folder and hand totals to wandb."""
+    table, totals = summarize(task.summary_modules(), k["SUMMARY_DEPTH"])
+    print(table, flush=True)
+    path = run_dir / "model_summary.txt"
+    path.write_text(table + "\n", encoding="utf-8")
+    for sink in sinks:
+        if isinstance(sink, WandbSink):
+            sink.summary(totals, path)
+
+
 def _restore(k, run_dir, manager, state, task, bundles, ema, rank) -> None:
     """Continue from the newest checkpoint of a resumed run."""
     if k["RESUME"] is None:
@@ -253,12 +265,15 @@ def worker(rank: int, world: int, k: dict, script: str = "") -> None:
     torch.manual_seed(k["SEED"] + rank)
     bundles = build_bundles(task, k, steps)
     ema = build_ema(task, k)
+    task.train()
 
     # Checkpointing, resume, logging and callbacks.
     state = TrainState()
     manager = CheckpointManager(run_dir / "checkpoints", k["CKPT_KEEP"], rank)
     _restore(k, run_dir, manager, state, task, bundles, ema, rank)
     metric_log = MetricLog(_sinks(k, run_dir, rank, script), k["LOG_EVERY"])
+    if rank == 0:
+        _summary(k, task, run_dir, metric_log.sinks)
     progress = None
     if rank == 0 and sys.stderr.isatty():
         progress = ProgressBar(steps, state.step, k["NAME"])
@@ -302,7 +317,6 @@ def worker(rank: int, world: int, k: dict, script: str = "") -> None:
         runner.step_end(current)
 
     # Train, then flush callbacks and logs and write the timing report.
-    task.train()
     driver.run(batches, state, steps, end_step)
     runner.finish(state)
     metric_log.close()

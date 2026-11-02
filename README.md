@@ -214,7 +214,7 @@ Every knob problem is reported together, before any GPU work:
   averaged across GPUs once per step.
 
 **Run folder.** `runs/<name>/<id>/` holds `config.json`, `git.json`, `metrics.jsonl`,
-`timing.json` (time per phase), `samples/` and `checkpoints/step_XXXXXXXX/`. Checkpoints are
+`model_summary.txt`, `timing.json` (time per phase), `samples/` and `checkpoints/step_XXXXXXXX/`. Checkpoints are
 written atomically and hold the weights, optimizer state, EMA, RNG state per GPU and the data
 position.
 
@@ -225,6 +225,12 @@ named `NAME`, every row carries `trainer/global_step` and `epoch`, panels plot a
 `trainer/global_step`, and the script, `config.json` and `git.json` are saved to the run.
 `WANDB_OFFLINE` keeps the run local, `WANDB_RUN_ID` with `WANDB_RESUME` continues one, and
 `WANDB_WATCH` logs gradient histograms every N steps.
+
+**Module summary.** Before the first step rank 0 prints a Lightning-style table of the model,
+critic, latent terms and loss networks down to `SUMMARY_DEPTH` (2 by default, Lightning uses 1):
+parameters, trainable parameters and train/eval mode per module, then the trainable, frozen and
+total counts and their size in MB. The table is kept as `model_summary.txt`; wandb gets the file and
+the totals as `model/params_*` summary values.
 
 | Section | What it holds |
 | --- | --- |

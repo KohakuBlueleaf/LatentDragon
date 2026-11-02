@@ -143,6 +143,10 @@ class AutoencoderTask(Task):
             saved["latent_terms"] = self.term_modules
         return saved
 
+    def summary_modules(self) -> dict[str, torch.nn.Module]:
+        """The saved modules plus the frozen loss networks, which also take memory."""
+        return {**self.saved_modules(), "loss": self.objective.loss}
+
     def ema_named_params(self) -> dict[str, torch.nn.Parameter]:
         return {n: p for n, p in self.model.named_parameters() if p.requires_grad}
 

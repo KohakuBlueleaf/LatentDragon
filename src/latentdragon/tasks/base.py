@@ -27,6 +27,10 @@ class Task:
         """Name -> module for checkpoints."""
         raise NotImplementedError
 
+    def summary_modules(self) -> dict[str, torch.nn.Module]:
+        """Name -> module for the module summary; the checkpointed ones by default."""
+        return self.saved_modules()
+
     def ema_named_params(self) -> dict[str, torch.nn.Parameter]:
         """Parameters tracked by weight EMA."""
         return {}

@@ -22,6 +22,7 @@ WANDB_RESUME: str | None = (
 )
 WANDB_OFFLINE = False  # keep the run local; `wandb sync` uploads it later
 WANDB_WATCH = 0  # log gradient and parameter histograms every N steps; 0 is off
+SUMMARY_DEPTH = 2  # module summary rows down to this depth; 1 is Lightning's default
 DIST_TIMEOUT_HOURS = 4
 RESUME: str | None = None  # a run folder to continue
 RESUME_IGNORE: list[str] = []  # knobs allowed to differ on resume
