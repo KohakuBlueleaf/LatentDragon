@@ -1,8 +1,10 @@
 """Residual blocks; `build_block` is the one construction point."""
 
+import math
 from collections.abc import Callable
 from typing import Any
 
+import torch
 import torch.nn as nn
 from torch import Tensor
 
@@ -23,11 +25,39 @@ class Block(nn.Module):
     """Marks the modules `apply_recompute` acts on.
 
     `spatial_reach` is the pixels one block reads on each side at its resolution, None
-    when unknown. `temporal_reach` is the past frames it reads.
+    when unknown. `temporal_reach` is the past frames it reads. `writer` is the layer whose
+    output is added to the residual stream.
     """
 
     spatial_reach: int | None = None
     temporal_reach: int = 0
+
+    @property
+    def writer(self) -> nn.Module | None:
+        return None
+
+
+WRITER_INITS = ("hidden", "output")
+
+
+def init_writers(module: nn.Module, mode: str) -> None:
+    """With `mode="output"`, every block writer gets the output-layer scale and a zero bias.
+
+    Writers come from the family's `mup_init` at std `fan_in ** -0.5`; scaling them by
+    `fan_in ** -0.5` gives the output-layer std `1 / fan_in` without drawing new values, so
+    every other parameter keeps its init. `"hidden"` leaves the writers as they are.
+    """
+    if mode not in WRITER_INITS:
+        raise ValueError(f"writer_init must be one of {WRITER_INITS}, got {mode!r}")
+    if mode == "hidden":
+        return
+    with torch.no_grad():
+        for block in module.modules():
+            if isinstance(block, Block) and block.writer is not None:
+                weight = block.writer.weight
+                weight.mul_(math.prod(weight.shape[1:]) ** -0.5)
+                if block.writer.bias is not None:
+                    block.writer.bias.zero_()
 
 
 def _channel_mlp(in_dim: int, mlp_dim: int, out_dim: int) -> nn.Module:
@@ -51,11 +81,27 @@ class BasicBlock(Block):
         self.mixer = nn.Conv2d(in_dim, in_dim, 3, 1, 1, groups=in_dim)
         self.swiglu = _channel_mlp(in_dim, mlp_dim, out_dim)
 
+    @property
+    def writer(self) -> nn.Module:
+        """The channel MLP's output projection."""
+        return getattr(self.swiglu, "out", self.swiglu)
+
     @compile_wrapper(scope="module")
     def forward(self, x: Tensor) -> Tensor:
         """Spatial mix, then channel MLP on channels-last, added to `x`."""
         mixed = self.mixer(self.norm(x)).transpose(1, -1)
         return x + self.swiglu(mixed).transpose(1, -1)
+
+
+@BLOCK.register("mlp_plain")
+class PlainBlock(BasicBlock):
+    """`BasicBlock` without the residual add: norm, depthwise 3x3, channel MLP."""
+
+    @compile_wrapper(scope="module")
+    def forward(self, x: Tensor) -> Tensor:
+        """Spatial mix, then channel MLP on channels-last; nothing is added back."""
+        mixed = self.mixer(self.norm(x)).transpose(1, -1)
+        return self.swiglu(mixed).transpose(1, -1)
 
 
 @BLOCK.register("res")
@@ -82,6 +128,11 @@ class BasicResBlock(Block):
             nn.Conv2d(in_dim, out_dim, 1) if in_dim != out_dim else nn.Identity()
         )
 
+    @property
+    def writer(self) -> nn.Module:
+        """The second convolution, added to the (projected) input."""
+        return self.conv2
+
     @compile_wrapper(scope="module")
     def forward(self, x: Tensor) -> Tensor:
         """Two norm-act-conv rounds added to the (projected) input."""
@@ -105,6 +156,11 @@ class BasicBlock3D(Block):
         self.mixer = SpatialDWConv(in_dim)
         self.tmixer = CausalTemporalConv(in_dim)
         self.swiglu = _channel_mlp(in_dim, mlp_dim, out_dim)
+
+    @property
+    def writer(self) -> nn.Module:
+        """The channel MLP's output projection."""
+        return getattr(self.swiglu, "out", self.swiglu)
 
     def stream(
         self, x: Tensor, has_keyframe: bool = True, causal_cache: Tensor | None = None

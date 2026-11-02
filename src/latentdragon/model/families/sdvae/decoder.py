@@ -9,6 +9,7 @@ from optimfactory import mup_init
 from torch import Tensor, nn
 
 from latentdragon.model.core.contracts import DECODER, TensorPart
+from latentdragon.model.nn.blocks import init_writers
 from latentdragon.model.nn.layers import resolve_norm
 from latentdragon.model.nn.reach import Reach, declared, is_local
 from latentdragon.model.nn.stages import ConvStage, attn_slots, product
@@ -30,6 +31,7 @@ class SDVAEDecoder(TensorPart):
         block: Any = "res",
         input: str = "z",
         output: str = "y",
+        writer_init: str = "hidden",
     ):
         super().__init__(input, output)
         norm_layer = resolve_norm(norm)
@@ -52,6 +54,7 @@ class SDVAEDecoder(TensorPart):
         self.attn_blocks = attn_slots(attn, entering, norm_layer)
         self.out_channels = in_dim
         mup_init(self.parameters())
+        init_writers(self.stages, writer_init)
 
     @property
     def spatial_scale(self) -> int:

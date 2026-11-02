@@ -1,7 +1,8 @@
 """LatentMaid decoders: pixel-shuffle stages of MLP blocks, for images and video.
 
 Each reads one decoder slot and writes one feature slot, the output latent a head turns into
-the signal. `out_channels` is the width of that feature slot.
+the signal. `out_channels` is the width of that feature slot. `writer_init="output"`
+gives every block's residual writer the output-layer init instead of the hidden one.
 """
 
 from collections.abc import Callable, Sequence
@@ -17,6 +18,7 @@ from optimfactory import mup_init
 from torch import Tensor
 
 from latentdragon.model.core.contracts import DECODER, TensorPart
+from latentdragon.model.nn.blocks import init_writers
 from latentdragon.model.nn.layers import resolve_norm
 from latentdragon.model.nn.reach import Reach, declared, is_local
 from latentdragon.model.nn.stages import (
@@ -47,6 +49,7 @@ class ShuffleDecoder(TensorPart):
         conv: type[nn.Conv2d],
         input: str,
         output: str,
+        writer_init: str = "hidden",
     ):
         super().__init__(input, output)
         norm_layer = resolve_norm(norm)
@@ -74,6 +77,7 @@ class ShuffleDecoder(TensorPart):
         self.attn_blocks = attn_slots(flags, [spec.hidden for spec in walk], norm_layer)
         self.out_channels = dim
         mup_init(self.parameters())
+        init_writers(self.stages, writer_init)
 
     @property
     def spatial_scale(self) -> int:
@@ -156,6 +160,7 @@ class LatentMaidDecoder(ShuffleDecoder):
         block: Any = "mlp",
         input: str = "z",
         output: str = "y",
+        writer_init: str = "hidden",
     ):
         super().__init__(
             in_channels,
@@ -166,6 +171,7 @@ class LatentMaidDecoder(ShuffleDecoder):
             nn.Conv2d,
             input,
             output,
+            writer_init,
         )
 
 
@@ -181,6 +187,7 @@ class LatentMaidVideoDecoder(ShuffleDecoder):
         block: Any = "mlp3d",
         input: str = "z",
         output: str = "y",
+        writer_init: str = "hidden",
     ):
         super().__init__(
             in_channels,
@@ -191,6 +198,7 @@ class LatentMaidVideoDecoder(ShuffleDecoder):
             SpatialConv2d,
             input,
             output,
+            writer_init,
         )
 
     def tensor(self, z: Tensor, has_keyframe: bool = True) -> Tensor:

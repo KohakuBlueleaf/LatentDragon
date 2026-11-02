@@ -8,6 +8,7 @@ from optimfactory import mup_init
 from torch import Tensor
 
 from latentdragon.model.core.contracts import ENCODER, TensorPart
+from latentdragon.model.nn.blocks import init_writers
 from latentdragon.model.nn.layers import resolve_norm
 from latentdragon.model.nn.stages import ConvStage, attn_slots, product
 
@@ -26,6 +27,7 @@ class SDVAEEncoder(TensorPart):
         block: Any = "res",
         input: str = "x",
         output: str = "h",
+        writer_init: str = "hidden",
     ):
         super().__init__(input, output)
         norm_layer = resolve_norm(norm)
@@ -55,6 +57,7 @@ class SDVAEEncoder(TensorPart):
         self.conv_out = nn.Conv2d(in_dim, out_channels, 3, 1, 1)
         self.attn_blocks = attn_slots(attn, [cfg[1] for cfg in stages], norm_layer)
         mup_init(self.parameters())
+        init_writers(self.stages, writer_init)
 
     @property
     def last_layer(self) -> nn.Module:
