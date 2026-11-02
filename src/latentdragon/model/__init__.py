@@ -1,5 +1,6 @@
 """Encoders, trunks, heads and the autoencoder that composes them."""
 
+from latentdragon.model.arch import AEArchConfig, build_autoencoder
 from latentdragon.model.autoencoder import Autoencoder
 from latentdragon.model.blocks import BLOCK, Block, build_block
 from latentdragon.model.compile import (
@@ -17,12 +18,6 @@ from latentdragon.model.encoders import (
 from latentdragon.model.heads import HEAD, RegressionHead
 from latentdragon.model.layers import NORM, AttnBlock, SwiGLU, resolve_norm
 from latentdragon.model.mechanics import apply_recompute
-from latentdragon.model.presets import (
-    PRESETS,
-    AEArchConfig,
-    build_autoencoder,
-    get_preset,
-)
 from latentdragon.model.reach import Reach
 from latentdragon.model.trunks import TRUNK, ConvTrunk, MLPTrunk, VideoTrunk
 
@@ -32,7 +27,6 @@ __all__ = [
     "ENCODER",
     "HEAD",
     "NORM",
-    "PRESETS",
     "TRUNK",
     # base classes and configs
     "AEArchConfig",
@@ -57,6 +51,5 @@ __all__ = [
     "compile_parts",
     "compile_wrapper",
     "configure",
-    "get_preset",
     "resolve_norm",
 ]

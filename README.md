@@ -18,7 +18,7 @@ train both.
 ## LatentMaid
 
 An autoencoder is `encoder -> bottleneck -> trunk -> head`. Each part is registered in a registry
-and built from a preset, so a config picks parts instead of editing code. The decoder is a trunk plus
+and built from the `ARCH` dict of a config, so a config picks parts instead of editing code. The decoder is a trunk plus
 a head (its last projection); a stage-two run can freeze everything but the head.
 
 **MLP encoder and decoder.** A stage is `(scale, hidden, mlp, blocks)`: pixel-unshuffle by
@@ -50,19 +50,17 @@ with cached frames and gives the same result as the full forward.
 | `nested` | keeps a prefix of the latent channels per sample, cycling through the widths, for example `(8, 16, 32, 64)`; validation reports every width. Around `vq`, `unit="partition"` counts partitions and `jitter` shifts a sample's width by up to one step |
 | `vq` | KohakuVQ, below |
 
-**Presets.** Each image preset has a recipe in `configs/ae/recipes/`.
+**Architecture in the config.** `ARCH` is a dict of `AEArchConfig` fields written in the config
+file, so every encoder, bottleneck, quantizer and trunk setting is a knob. `configs/ae/arch/` holds
+the published layouts, pulled in with `use_config`:
 
-| Preset | Encoder / decoder | Latent | Bottleneck |
+| File | Encoder / decoder | Latent | Bottleneck |
 | --- | --- | --- | --- |
-| `sdvae_f8c4` | conv / conv, GroupNorm | f8, 4 ch | KL |
-| `latentmaid_f8c4` | MLP / conv | f8, 4 ch | identity |
-| `latentmaid_0222_f8c4` | MLP / conv | f8, 4 ch | KL |
-| `latentmaid_0222_better_dec_f8c4` | MLP / conv | f8, 4 ch | KL |
-| `latentmaid_0222_f16c64n16` | MLP / conv | f16, 64 ch | nested KL (8, 16, 32, 64) |
-| `kvq_f16c256` | MLP / conv | f16, 256 ch | KohakuVQ, 65536 codes |
-| `kvq_f16c256_stylegan2` | MLP / conv | f16, 256 ch | KohakuVQ, 65536 codes |
-| `kvq_f16c256_production` | MLP / MLP | f16, 256 ch | KohakuVQ, 65536 codes |
-| `video_f16t6c32` | video / video | f16, 6x temporal, 32 ch | identity |
+| `sdvae.py` | SD-VAE conv / SD-VAE conv | f8, 4 ch | KL |
+| `fluxvae.py` | SD-VAE conv / SD-VAE conv | f8, 16 ch | KL |
+| `latentmaid/2222.py` | MLP, 2 blocks at f1, f2, f4, f8 / SD-VAE conv | f8, 4 ch | KL |
+| `latentmaid/0222.py` | MLP, 2 blocks at f2, f4, f8 / SD-VAE conv | f8, 4 ch | KL |
+| `latentmaid/0022.py` | MLP, 2 blocks at f4, f8 / SD-VAE conv | f8, 4 ch | KL |
 
 ## KohakuVQ
 
@@ -89,11 +87,10 @@ $$c_k = s \odot f_\theta(b_k), \qquad f_\theta(b) = W_2\,\sigma(W_1 b + \beta_1)
 
 A nonlinear projector can reach full rank and non-Gaussian code distributions from a `d`-dimensional base, and
 that base leaves each code little freedom to move on its own; that is the intended reason the base can
-be trained. The codebook costs `N d + d h + h D` parameters. The 65536-code, 256-channel recipe has about 1.6 M
+be trained. The codebook costs `N d + d h + h D` parameters. A 65536-code, 256-channel codebook has about 1.6 M
 instead of 16.8 M.
 
-The recipe in `configs/ae/recipes/recipes_kvq_f16c256.py` is a single codebook: 65536 codes, base
-16, hidden 2048. The quantizers are `kohaku` and `naive`, both with straight-through backward, and the converter
+The quantizers are `kohaku` and `naive`, both with straight-through backward, and the converter
 reads checkpoints of those two.
 
 **Multiple codebooks.** A latent of `C` channels splits into `P` partitions, and each partition
@@ -167,31 +164,31 @@ An `image_folder` source reads every `.jpg`, `.jpeg`, `.png` and `.webp` image u
 files are converted to RGB. The first run writes the file list to `imgonly_metadata_filtered.npy` in
 that root, so the folder must be writable once; later runs read that file and do not rescan. A `video_folder` source does the same for videos.
 
-The recipes read `LATENTDRAGON_DATA`, a folder with `imagenet/train` and `imagenet/val`. The
-`production` recipe reads several roots from `LATENTDRAGON_TRAIN_ROOTS`, separated by the OS path
-separator.
+The recipes read `LATENTDRAGON_DATA`, a folder with `imagenet/train` and `imagenet/val`.
+`configs/ae/data/multi.py` reads several roots from `LATENTDRAGON_TRAIN_ROOTS`, separated by the OS
+path separator.
 
 ## Train
 
 ```bash
 export LATENTDRAGON_DATA=/path/to/data
-kogine run scripts/train/ae.py --config configs/ae/recipes/recipes_kvq_f16c256.py
+kogine run scripts/train/ae.py --config configs/ae/recipes/latentmaid/0222.py
 ```
 
 Every knob is an UPPER_CASE global in `scripts/train/ae.py`, and `--set NAME=value` overrides one:
 
 ```bash
-kogine run scripts/train/ae.py --config configs/ae/recipes/recipes_kvq_f16c256.py \
+kogine run scripts/train/ae.py --config configs/ae/recipes/latentmaid/0222.py \
   --set LR=1e-4 --set EPOCHS=10
 ```
 
 The recipes use four GPUs, and `BATCH_SIZE` is per GPU. For other hardware write a config that
-builds on a recipe:
+builds on a recipe, for example `my_configs/one_gpu.py`:
 
 ```python
 from kohakuengine import use_config
 
-use_config("recipes_kvq_f16c256.py")
+use_config("../configs/ae/recipes/latentmaid/0222.py")  # relative to this file
 DEVICES = [0]
 BATCH_SIZE = 16
 ```
@@ -253,20 +250,18 @@ FREEZE = ["encoder", "bottleneck", "trunk"]
 ```
 
 `FREEZE` takes any dotted model path. Frozen parts stay in eval mode and out of every optimizer.
-See `configs/ae/recipes/recipes_kvq_f16c256_stage2.py`.
 
 ## Recipes
 
-| Recipe | Preset | GAN |
-| --- | --- | --- |
-| `kvq_f16c256` | `kvq_f16c256` | taming, RMSNorm PatchGAN |
-| `kvq_f16c256_stylegan2` | `kvq_f16c256_stylegan2` | StyleGAN2 |
-| `kvq_f16c256_production` | `kvq_f16c256_production` | taming, DINOv3 perceptual loss, several image roots |
-| `kvq_f16c256_stage2` | `kvq_f16c256` | stage two of the above |
-| `sdvae_f8c4` | `sdvae_f8c4` | taming, BatchNorm PatchGAN |
-| `latentmaid_f8c4`, `_r3gan`, `_stylegan2` | `latentmaid_f8c4` | taming, R3GAN, StyleGAN2 |
-| `latentmaid_0222_f8c4`, `_better_dec_f8c4` | same name | taming |
-| `latentmaid_0222_f16c64n16` | same name | taming |
+Every recipe in `configs/ae/recipes/` is ImageNet, fp16 and the taming setup in
+`configs/ae/train/taming.py` (MSE + 0.5 LPIPS-VGG, KL 1e-6, hinge BatchNorm PatchGAN from step 25000
+with the adaptive weight) on one arch file of the same name:
+
+| Recipe | Arch |
+| --- | --- |
+| `sdvae.py` | `arch/sdvae.py` |
+| `fluxvae.py` | `arch/fluxvae.py` |
+| `latentmaid/2222.py`, `0222.py`, `0022.py` | `arch/latentmaid/` of the same name |
 
 ## Convert and export
 
@@ -328,7 +323,7 @@ src/latentdragon_data/      image and video sources, resumable loader
 src/latentdragon/
   model/  bottleneck/  vq/  domain/  gan/  latent/  objectives/
   tasks/  training/  eval/  inference/  io/
-configs/ae/                 data, precision, recipes
+configs/ae/                 arch, data, precision, train setups, recipes
 scripts/                    train, export, tools
 experiments/                decode strategies, kernel precision, throughput
 docs/                       concepts, guides

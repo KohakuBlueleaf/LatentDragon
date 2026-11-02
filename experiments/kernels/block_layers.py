@@ -1,19 +1,22 @@
 """Question: which layers of a block hold its time?
 
-Runs real blocks of a preset with a device sync around every leaf layer, forward only, in both
+Runs real blocks of an arch file with a device sync around every leaf layer, forward only, in both
 layouts, and prints each layer's milliseconds and share. Run on an idle GPU. Real compute.
 
     kogine run experiments/kernels/block_layers.py
 """
 
 import time
+from pathlib import Path
 
 import torch
+from kohakuengine import load_config_file
 
-from latentdragon.model import build_autoencoder, get_preset
+from latentdragon.io.arch_json import arch_from_json
+from latentdragon.model import AEArchConfig, build_autoencoder
 from latentdragon.model.blocks import Block
 
-PRESET: str = "sdvae_f8c4"
+ARCH_FILE: Path = Path("configs/ae/arch/sdvae.py")
 DEVICE: str = "cuda:0"
 BATCH: int = 16
 SIZE: int = 256
@@ -49,6 +52,11 @@ class LayerClock:
             self.seconds[name] = min(self.seconds.get(name, spent), spent)
 
         return stop
+
+
+def arch_of(path: Path, **changes) -> AEArchConfig:
+    """The `ARCH` of an arch config file, with fields replaced by `changes`."""
+    return arch_from_json({**load_config_file(path).globals_dict["ARCH"], **changes})
 
 
 def inputs_of(model, x: torch.Tensor) -> dict:
@@ -100,7 +108,7 @@ def main() -> None:
     """Print each named block in both layouts."""
     torch.cuda.set_device(DEVICE)
     torch.backends.cudnn.benchmark = True
-    model = build_autoencoder(get_preset(PRESET)).to(DEVICE).eval()
+    model = build_autoencoder(arch_of(ARCH_FILE)).to(DEVICE).eval()
     seen = inputs_of(model, torch.randn(BATCH, 3, SIZE, SIZE, device=DEVICE))
     for layout in (torch.preserve_format, torch.channels_last):
         model.to(memory_format=layout)

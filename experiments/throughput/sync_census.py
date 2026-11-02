@@ -3,7 +3,7 @@
 Builds a recipe on one GPU, runs warm-up steps, then one step under sync debug `warn` and
 prints each host sync with its Python stack. Also counts them. Real compute.
 
-    kogine run experiments/throughput/sync_census.py --set RECIPE=bench_taming_active
+    kogine run experiments/throughput/sync_census.py --set RECIPE=ae/recipes/sdvae
 """
 
 import json
@@ -26,7 +26,7 @@ from latentdragon_common.registry import build
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "train" / "ae.py"
-RECIPE: str = "bench_taming_active"
+RECIPE: str = "ae/recipes/latentmaid/0222"  # a config under configs/, no .py
 KNOBS: dict = {}
 DEVICE: str = "cuda:0"
 WARM: int = 8
@@ -38,10 +38,8 @@ OUT: Path = Path("runs/bench/sync_census.jsonl")
 def knobs_of() -> dict:
     """Script defaults under the recipe, under `KNOBS`."""
     values = supplied_knobs(dict(load_config_file(SCRIPT).globals_dict))
-    for folder in ("configs/ae/recipes", "configs/ae/bench"):
-        path = ROOT / folder / f"{RECIPE}.py"
-        if path.exists():
-            values.update(supplied_knobs(dict(load_config_file(path).globals_dict)))
+    path = ROOT / "configs" / f"{RECIPE}.py"
+    values.update(supplied_knobs(dict(load_config_file(path).globals_dict)))
     values.pop("FRAMES", None)
     return {**values, "EPOCHS": 0, "MAX_STEPS": 100, **KNOBS}
 

@@ -12,20 +12,34 @@ import json
 import torch
 
 from latentdragon.inference import decode, stream_encode
-from latentdragon.model import build_autoencoder, get_preset
+from latentdragon.io.arch_json import arch_from_json
+from latentdragon.model import AEArchConfig, build_autoencoder
 
+# Small untrained layouts; strategy error does not depend on width
 VIDEO = {
+    "domain": "video",
+    "encoder": "video",
+    "trunk": "video",
+    "encoder_norm": "rms",
+    "trunk_norm": "rms",
     "latent_dim": 4,
     "encoder_blocks": ((2, 2, 16, 16, 1), (2, 2, 16, 16, 1)),
     "trunk_blocks": ((1, 2, 16, 16, 2), (2, 2, 32, 32, 2), (2, 1, 32, 32, 2)),
 }
 IMAGE_ENCODER = ((2, 16, 16, 1), (2, 16, 16, 1), (2, 16, 16, 1))
 CONV_IMAGE = {
+    "encoder": "mlp",
+    "trunk": "conv",
+    "encoder_norm": "rms",
+    "trunk_norm": "rms",
     "latent_dim": 4,
     "encoder_blocks": IMAGE_ENCODER,
     "trunk_blocks": ((2, 32, 1), (2, 32, 1), (2, 16, 1)),
 }
 MLP_IMAGE = {
+    "encoder": "mlp",
+    "encoder_norm": "rms",
+    "trunk_norm": "rms",
     "latent_dim": 4,
     "encoder_blocks": IMAGE_ENCODER,
     "trunk": "mlp",
@@ -55,6 +69,11 @@ MLP_IMAGE_CASES = [
 ]
 
 
+def arch_of(fields: dict) -> AEArchConfig:
+    """An arch from `fields`; absent fields take their defaults."""
+    return arch_from_json(fields)
+
+
 def tiled_output(model, z: torch.Tensor, case) -> tuple[torch.Tensor, int]:
     """Decode with `case` and count the head calls, one per tile or chunk."""
     calls = []
@@ -80,7 +99,7 @@ def report(label, value, reference, case, calls: int = 1) -> None:
 def main() -> None:
     torch.manual_seed(0)
 
-    video = build_autoencoder(get_preset("video_f16t6c32", **VIDEO)).eval()
+    video = build_autoencoder(arch_of(VIDEO)).eval()
     print(json.dumps({"video_reach": str(video.reach())}))
     z = torch.randn(1, 4, 9, 40, 40)
     full = decode(video, z)
@@ -99,7 +118,7 @@ def main() -> None:
         ("mlp_image", MLP_IMAGE, MLP_IMAGE_CASES),
     )
     for label, arch, cases in images:
-        image = build_autoencoder(get_preset("latentmaid_f8c4", **arch)).eval()
+        image = build_autoencoder(arch_of(arch)).eval()
         print(json.dumps({f"{label}_reach": str(image.reach())}))
         full = decode(image, z)
         for case in cases:

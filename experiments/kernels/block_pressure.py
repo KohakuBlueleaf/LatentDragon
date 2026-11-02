@@ -1,7 +1,7 @@
 """Question: how far from the card's compute and memory peaks does each block run?
 
 Measures a compute peak (a bare wide conv) and memory peaks (read and copy over a buffer far
-past the cache). Then times every block of a preset alone, forward and backward,
+past the cache). Then times every block of an arch file alone, forward and backward,
 and counts its MACs, the bytes its layers read and write, and the bytes that remain when the
 block is fused so only its input and output touch memory. Run on an idle GPU. Real compute.
 
@@ -14,12 +14,14 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+from kohakuengine import load_config_file
 from torch import nn
 
-from latentdragon.model import build_autoencoder, get_preset
+from latentdragon.io.arch_json import arch_from_json
+from latentdragon.model import AEArchConfig, build_autoencoder
 from latentdragon.model.blocks import Block
 
-PRESET: str = "sdvae_f8c4"
+ARCH_FILE: Path = Path("configs/ae/arch/sdvae.py")
 DEVICE: str = "cuda:0"
 BATCH: int = 16
 SIZE: int = 256
@@ -27,6 +29,11 @@ DTYPE = torch.bfloat16
 BYTES = 2
 L2_MIB: float = 88.0  # RTX 5090 L2, from the card's public spec
 OUT: Path = Path("runs/bench/block_pressure.jsonl")
+
+
+def arch_of(path: Path, **changes) -> AEArchConfig:
+    """The `ARCH` of an arch config file, with fields replaced by `changes`."""
+    return arch_from_json({**load_config_file(path).globals_dict["ARCH"], **changes})
 
 
 def best_seconds(run, rounds: int = 12) -> float:
@@ -156,7 +163,7 @@ def main() -> None:
     top = peaks()
     print(top, flush=True)
 
-    model = build_autoencoder(get_preset(PRESET)).to(DEVICE).train()
+    model = build_autoencoder(arch_of(ARCH_FILE)).to(DEVICE).train()
     x = torch.randn(BATCH, 3, SIZE, SIZE, device=DEVICE)
     names = {module: name for name, module in model.named_modules()}
     rows = []

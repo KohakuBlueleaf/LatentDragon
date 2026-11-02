@@ -5,7 +5,7 @@ fp64 as the reference, plain PyTorch at the same dtype as the baseline, and the 
 compiled setup as the candidate. Writes one row per model part: max, mean and median of the
 relative and absolute error, cosine, and a triage mark. Real compute.
 
-    kogine run experiments/precision/model_grads.py --set RECIPE=recipes_kvq_f16c256
+    kogine run experiments/precision/model_grads.py --set RECIPE=ae/recipes/sdvae
 """
 
 import dataclasses
@@ -25,7 +25,7 @@ from latentdragon_kernels.error_stats import compare
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "train" / "ae.py"
 
-RECIPE: str = "recipes_kvq_f16c256"
+RECIPE: str = "ae/recipes/latentmaid/0222"  # a config under configs/, no .py
 DEVICE: str = "cuda:0"
 BATCH: int = 4
 SIZE: int = 256
@@ -41,10 +41,8 @@ OUT: Path = Path("runs/precision/model_grads.jsonl")
 def knobs_of(**changes) -> dict:
     """Script defaults under the recipe, with `changes` on top."""
     values = supplied_knobs(dict(load_config_file(SCRIPT).globals_dict))
-    for folder in ("configs/ae/recipes", "configs/ae/bench"):
-        path = ROOT / folder / f"{RECIPE}.py"
-        if path.exists():
-            values.update(supplied_knobs(dict(load_config_file(path).globals_dict)))
+    path = ROOT / "configs" / f"{RECIPE}.py"
+    values.update(supplied_knobs(dict(load_config_file(path).globals_dict)))
     values.pop("FRAMES", None)
     return {
         **values,
@@ -113,7 +111,7 @@ def main() -> None:
     trained = {}
     if CHECKPOINT is not None:
         arch, live, _ = read_lightning(CHECKPOINT)
-        trained = {"ARCH_OVERRIDES": dataclasses.asdict(arch)}
+        trained = {"ARCH": dataclasses.asdict(arch)}
 
     # Reference: eager kernels and everything in fp64
     reference = build_task(knobs_of(KERNELS="eager", **trained), DEVICE)

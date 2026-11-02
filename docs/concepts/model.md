@@ -5,9 +5,12 @@
 knowledge.
 
 ```python
-from latentdragon.model import build_autoencoder, get_preset
+from kohakuengine import load_config_file
+from latentdragon.io.arch_json import arch_from_json
+from latentdragon.model import build_autoencoder
 
-model = build_autoencoder(get_preset("latentmaid_0222_f8c4"))
+arch = load_config_file("configs/ae/arch/sdvae.py").globals_dict["ARCH"]
+model = build_autoencoder(arch_from_json(arch))
 raw = model.encode(x)                # channels at dim 1
 out = model.bottleneck(raw, offset)  # BottleneckOut
 features = model.decode(out.z)       # trunk features

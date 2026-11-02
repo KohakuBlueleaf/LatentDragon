@@ -1,6 +1,6 @@
 """Train an autoencoder. Every knob is an UPPER_CASE global; defaults are a CPU smoke run.
 
-kogine run scripts/train/ae.py --config configs/ae/recipes/recipes_kvq_f16c256.py
+kogine run scripts/train/ae.py --config configs/ae/recipes/latentmaid/0222.py
 """
 
 from typing import Literal
@@ -41,8 +41,14 @@ VAL_WORKERS = 4
 VAL_BATCH_SIZE = 64
 
 # --- model ---
-ARCH = "kvq_f16c256"
-ARCH_OVERRIDES = {}
+ARCH = {  # every AEArchConfig field; a recipe gets its own from configs/ae/arch/
+    "latent_dim": 4,
+    "encoder": "conv",
+    "encoder_blocks": [[2, 8, 1]],
+    "trunk": "conv",
+    "trunk_blocks": [[2, 8, 1]],
+    "bottleneck": {"name": "vq", "quantizer": {"name": "kohaku", "n_embed": 8}},
+}
 GRAD_CKPT = False
 COMPILE: Literal["off", "function", "module", "model"] = "off"
 COMPILE_MODE = "default"  # torch.compile mode

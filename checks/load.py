@@ -1,8 +1,10 @@
-"""Loading: presets build, and every file format rebuilds the same model."""
+"""Loading: every arch file builds, and every file format rebuilds the same model."""
 
 import torch
-from _tiny import run_checks
+from _tiny import ROOT, run_checks
+from kohakuengine import load_config_file
 
+from latentdragon.io.arch_json import arch_from_json
 from latentdragon.io.diffusers_model import LatentDragonVAE
 from latentdragon.io.export import load_export, save_diffusers, save_export
 from latentdragon.io.legacy import (
@@ -11,7 +13,7 @@ from latentdragon.io.legacy import (
     write_lightning,
     write_safetensors,
 )
-from latentdragon.model import PRESETS, build_autoencoder, get_preset
+from latentdragon.model import AEArchConfig, build_autoencoder
 
 TINY = {
     "latent_dim": 4,
@@ -31,7 +33,7 @@ TINY = {
 
 def tiny_model():
     """A small KohakuVQ model and its arch."""
-    arch = get_preset("kvq_f16c256", **TINY)
+    arch = AEArchConfig(**TINY)
     return arch, build_autoencoder(arch).eval()
 
 
@@ -47,10 +49,14 @@ def assert_same_output(first, second) -> None:
     assert torch.equal(first(x)[0], second(x)[0])
 
 
-def every_preset_builds(folder) -> None:
+def every_arch_file_builds(folder) -> None:
+    files = sorted((ROOT / "configs" / "ae" / "arch").glob("*.py"))
+    assert files
     with torch.device("meta"):
-        for arch in PRESETS.values():
-            build_autoencoder(arch)
+        for path in files:
+            build_autoencoder(
+                arch_from_json(load_config_file(path).globals_dict["ARCH"])
+            )
 
 
 def native_export_loads(folder) -> None:
@@ -86,7 +92,7 @@ def diffusers_folder_loads(folder) -> None:
 
 if __name__ == "__main__":
     run_checks(
-        every_preset_builds,
+        every_arch_file_builds,
         native_export_loads,
         legacy_safetensors_loads,
         legacy_lightning_loads,

@@ -8,6 +8,7 @@ import torch
 from anyschedule import AnySchedule
 
 from latentdragon.gan import CRITIC, GAN_SCHEME
+from latentdragon.io.arch_json import arch_from_json
 from latentdragon.latent import LATENT_TERM, LATENT_VIEW, TEACHER, WEIGHTING
 from latentdragon.model import (
     allow_donated_buffers,
@@ -15,7 +16,6 @@ from latentdragon.model import (
     build_autoencoder,
     compile_parts,
     configure,
-    get_preset,
 )
 from latentdragon.model.compile import SETUP
 from latentdragon.objectives import HEAD_OBJECTIVES, OBJECTIVE
@@ -48,8 +48,8 @@ WIRE_DTYPES = {None: None, "bf16": torch.bfloat16, "fp16": torch.float16}
 
 
 def arch_config(k: dict):
-    """The selected architecture with overrides applied."""
-    return get_preset(k["ARCH"], **k["ARCH_OVERRIDES"])
+    """The architecture written in the `ARCH` knob."""
+    return arch_from_json(k["ARCH"])
 
 
 def _terms(k: dict) -> list:

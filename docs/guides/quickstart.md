@@ -5,7 +5,7 @@
 3. Pick a recipe under `configs/ae/recipes/` and run it:
 
 ```bash
-kogine run scripts/train/ae.py --config configs/ae/recipes/recipes_kvq_f16c256.py
+kogine run scripts/train/ae.py --config configs/ae/recipes/latentmaid/0222.py
 ```
 
 Override any knob with `--set NAME=value`. The first GPU run tunes kernels per card and

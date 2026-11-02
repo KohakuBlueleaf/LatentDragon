@@ -2,9 +2,10 @@
 
 Runs recipes through the real entry point with validation, samples and checkpoints off, and
 appends one JSON row per case: step interval, phases, data wait, peak memory and GPU busy
-share. The cases live in a config under `configs/bench/`. Real compute.
+share. The cases live in a sweep config: `CASES`, each naming a recipe by its path under
+`configs/` without `.py`. Real compute.
 
-    kogine run experiments/throughput/recipes.py --config configs/bench/baseline_sync.py
+    kogine run experiments/throughput/recipes.py --config <sweep config>
 """
 
 import json
@@ -32,7 +33,6 @@ from transformers import DINOv3ViTConfig, DINOv3ViTModel  # noqa: E402
 from latentdragon.training.entry import run  # noqa: E402
 from latentdragon_common.knobs import supplied_knobs  # noqa: E402
 
-SEARCH = ("configs/ae/recipes", "configs/ae/bench")
 DINO_REPO = "facebook/dinov3-vitb16-pretrain-lvd1689m"
 
 TREE: Path = Path(
@@ -77,12 +77,11 @@ def script_path() -> Path:
 
 
 def recipe_path(name: str) -> Path:
-    """The config file of a recipe or bench config."""
-    for folder in SEARCH:
-        path = script_path().parents[2] / folder / f"{name}.py"
-        if path.exists():
-            return path
-    raise FileNotFoundError(name)
+    """The config file of a recipe or bench config: `name` is a path under configs/, no .py."""
+    path = script_path().parents[2] / "configs" / f"{name}.py"
+    if not path.exists():
+        raise FileNotFoundError(path)
+    return path
 
 
 def script_defaults() -> dict:

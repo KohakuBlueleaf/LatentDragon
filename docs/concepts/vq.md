@@ -1,7 +1,7 @@
 # Vector quantization
 
 KohakuVQ generates its codebook from a small trainable base with a shared MLP, so
-`c_k = s * f(b_k)` with `b_k` of dimension 8 to 16 (see the README). The recorded recipe is a
+`c_k = s * f(b_k)` with `b_k` of dimension 8 to 16 (see the README). The recorded configuration is a
 single codebook: 65536 codes, `partitions=1`, `rvq_levels=1`, base 16, hidden 2048.
 
 `latentdragon.vq` has one quantizer class, `GridQuantizer`, over a partition x residual grid.

@@ -51,7 +51,7 @@ def knobs(folder: Path, **changes) -> dict:
         TRAIN_SOURCES=[{"name": "image_folder", "root": write_images(folder / "d")}],
         SIZE=16,
         NUM_WORKERS=0,
-        ARCH_OVERRIDES=TINY_ARCH,
+        ARCH=TINY_ARCH,
         LOSS_CONFIGS=[Term("mse")],
         BATCH_SIZE=2,
         MAX_STEPS=2,

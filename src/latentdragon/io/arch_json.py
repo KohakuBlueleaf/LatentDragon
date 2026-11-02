@@ -22,10 +22,12 @@ def diffusers_levels(arch: AEArchConfig) -> list[int]:
 
 
 def arch_from_json(values: dict) -> AEArchConfig:
-    """Rebuild an arch; block rows return to tuples."""
+    """An arch from JSON or config values; block rows become tuples, absent fields default."""
     fields = dict(values)
     for key in ("encoder_blocks", "trunk_blocks"):
-        fields[key] = tuple(tuple(row) for row in fields[key])
+        if key in fields:
+            fields[key] = tuple(tuple(row) for row in fields[key])
     for key in ("encoder_attn", "trunk_attn"):
-        fields[key] = tuple(fields[key]) if fields[key] else None
+        if key in fields:
+            fields[key] = tuple(fields[key]) if fields[key] else None
     return AEArchConfig(**fields)

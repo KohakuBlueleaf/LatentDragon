@@ -3,7 +3,7 @@
 Profiles a few steps of a recipe with CUPTI and prints the ops by device time. Weights and
 data are synthetic; kernels and compile follow `KNOBS`. Real compute.
 
-    kogine run experiments/throughput/op_profile.py --set RECIPE=recipes_kvq_f16c256_production
+    kogine run experiments/throughput/op_profile.py --set RECIPE=ae/recipes/sdvae
 """
 
 import json
@@ -24,7 +24,7 @@ from latentdragon_common.registry import build
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "train" / "ae.py"
-RECIPE: str = "recipes_kvq_f16c256_production"
+RECIPE: str = "ae/recipes/latentmaid/0222"  # a config under configs/, no .py
 KNOBS: dict = {}
 DEVICE: str = "cuda:0"
 WARM: int = 6
@@ -36,10 +36,8 @@ OUT: Path = Path("runs/bench/op_profile.jsonl")
 def knobs_of() -> dict:
     """Script defaults under the recipe, under `KNOBS`."""
     values = supplied_knobs(dict(load_config_file(SCRIPT).globals_dict))
-    for folder in ("configs/ae/recipes", "configs/ae/bench"):
-        path = ROOT / folder / f"{RECIPE}.py"
-        if path.exists():
-            values.update(supplied_knobs(dict(load_config_file(path).globals_dict)))
+    path = ROOT / "configs" / f"{RECIPE}.py"
+    values.update(supplied_knobs(dict(load_config_file(path).globals_dict)))
     values.pop("FRAMES", None)
     return {**values, "EPOCHS": 0, "MAX_STEPS": 100, **KNOBS}
 

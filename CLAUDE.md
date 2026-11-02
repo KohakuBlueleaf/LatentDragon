@@ -72,7 +72,7 @@ This repo has no test suite and no CI workflow. Nothing here runs on every commi
 
 ```bash
 uv pip install -e ".[kernels,video,wandb,export,dev]"
-kogine run scripts/train/ae.py --config configs/ae/recipes/recipes_kvq_f16c256.py
+kogine run scripts/train/ae.py --config configs/ae/recipes/latentmaid/0222.py
 ```
 
 Never use `sys.path` hacks; import the installed packages.
