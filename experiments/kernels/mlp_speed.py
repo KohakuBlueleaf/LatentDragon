@@ -1,6 +1,6 @@
-"""Question: how fast and how large is each `mlp_project` backend on a recipe's codebook?
+"""Question: how fast and how large is each `mlp_project` backend on a 65536-code, 256-channel codebook?
 
-Times forward and backward of every backend at the production shape, across the gemm chunk
+Times forward and backward of every backend at that shape, across the gemm chunk
 sizes, with peak memory above the inputs. Real compute.
 
     kogine run experiments/kernels/mlp_speed.py

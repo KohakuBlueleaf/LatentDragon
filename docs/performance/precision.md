@@ -7,7 +7,7 @@ baseline. A row is marked `clear issue` at 10x the baseline error or a non-finit
 
 ## Kernels
 
-Run on an RTX 5090, fp16 and bf16, three activations, up to the production shape.
+Run on an RTX 5090, fp16 and bf16, three activations, up to 65536 codes x 256 channels.
 
 | Op | Rows | clear issue | large diff |
 | --- | --- | --- | --- |
@@ -21,7 +21,7 @@ approximation for gelu, and that shows as a real difference on gelu rows. No rec
 
 ## Model gradients
 
-Trained `latentmaid_0222_f8c4` weights, real images, eval mode so fp64 and fp32 draw the same
+Trained weights of an f8 KL model (MLP encoder, SD-VAE decoder), real images, eval mode so fp64 and fp32 draw the same
 noise. Convolutions run true fp32 here, with tf32 off.
 
 | dtype | Encoder cos | Trunk cos | Head cos |
@@ -35,7 +35,7 @@ gradients; compare them at true fp32.
 
 Weights trained in bf16 can overflow fp16: this model reaches activations near 1400, and a conv
 sum overflows in the forward. Fresh runs do not have this problem. Use
-`configs/ae/precision/precision_bf16.py` to continue such weights.
+`configs/ae/precision/bf16.py` to continue such weights.
 
 ## Equivalence with the research code
 
@@ -47,13 +47,13 @@ within 0.011%.
 
 Same seed and data, fresh weights, EMA loss at the end of a short run, no skipped steps in any run.
 
-| Recipe | Steps | bf16 | fp16 | bf16-true | fp16-true |
+| Setup | Steps | bf16 | fp16 | bf16-true | fp16-true |
 | --- | --- | --- | --- | --- | --- |
-| `kvq_f16c256` | 3000 | 0.2369 | 0.2366 | 0.2371 | 0.2359 |
-| `latentmaid_0222_f8c4` | 1500 | 0.1846 | 0.1846 | | |
-| `sdvae_f8c4` | 1500 | 0.1914 | 0.1903 | | |
-| `production_active` | 1500 | 0.3355 | 0.3306 | | |
-| `r3gan_active` | 1500 | 0.1667 | 0.1650 | | |
+| f16 KohakuVQ, 65536 codes x 256 ch, conv decoder, critic idle | 3000 | 0.2369 | 0.2366 | 0.2371 | 0.2359 |
+| f8 KL, MLP encoder, SD-VAE decoder | 1500 | 0.1846 | 0.1846 | | |
+| SD-VAE, `configs/ae/recipes/sdvae.py` | 1500 | 0.1914 | 0.1903 | | |
+| f16 KohakuVQ, 65536 codes x 256 ch, MLP decoder, MSE + LPIPS + DINOv3, taming critic from step 0 | 1500 | 0.3355 | 0.3306 | | |
+| f8, MLP encoder, RMSNorm conv decoder, R3GAN critic from step 0 | 1500 | 0.1667 | 0.1650 | | |
 
 fp16 ties or beats bf16 on all five, so it is the default. These are short runs. Stochastic
 rounding in `adam16` is what makes the 16-bit weight policies work: with nearest rounding the same
