@@ -19,6 +19,21 @@ class ScalarEma:
         self.values[name] = smooth
         return smooth
 
+    def update_all(self, step: int, values: dict[str, torch.Tensor]) -> dict:
+        """Smooth every scalar of `values` in one foreach lerp; new names start at their value."""
+        weight = 1 - min(0.995, step / (step + 10))
+        known = [name for name in values if name in self.values]
+        for name in values:
+            if name not in self.values:
+                self.values[name] = values[name].detach().float().clone()
+        if known:
+            torch._foreach_lerp_(
+                [self.values[name] for name in known],
+                [values[name].detach().float() for name in known],
+                weight,
+            )
+        return {name: self.values[name] for name in values}
+
 
 class NoUsage:
     """Usage window of a bottleneck with no codes."""

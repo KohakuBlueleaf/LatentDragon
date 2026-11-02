@@ -218,7 +218,8 @@ Every knob problem is reported together, before any GPU work:
 written atomically and hold the weights, optimizer state, EMA, RNG state per GPU and the data
 position.
 
-**Logging.** Rank 0 writes every logged step to `metrics.jsonl`; an interactive terminal shows a
+**Logging.** Every step is logged, every metric on every step (`METRICS_EVERY=1`); rows are copied
+to the host in batches of `FLUSH_EVERY`. Rank 0 writes each row to `metrics.jsonl`; an interactive terminal shows a
 progress bar with the headline metrics, and a log file gets one line per flush. With
 `WANDB_PROJECT` set, the same rows go to wandb as Lightning's `WandbLogger` sends them: the run is
 named `NAME`, every row carries `trainer/global_step` and `epoch`, panels plot against
@@ -237,6 +238,7 @@ the totals as `model/params_*` summary values.
 | `train/` | `eloss`, `psnr` and `ssim` smoothed, `nll`, `loss`, each loss term, `kl`, `z_mean`, `z_std` |
 | `vq/` | smoothed `loss`, `usage`, `perplexity`, `perplexity_rate`, the loss parts, `usage_ema` |
 | `gan/` | `g_loss`, `d_loss`, critic logits, the adaptive weight and its scale |
+| `<key>_ema` | next to every raw scalar of `train/`, `vq/`, `gan/` and `optim/grad_norm/`: our own EMA, decay `min(0.995, step / (step + 10))`, so a raw spike and the trend sit in one section |
 | `latent_stat_mean/`, `latent_stat_std/` | per latent channel |
 | `optim/` | learning rate per group, gradient norm, skipped steps and loss scale per network |
 | `raw/` | the unsmoothed values behind the smoothed ones |

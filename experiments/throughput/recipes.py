@@ -106,7 +106,7 @@ def knobs_of(case: dict, folder: str, steps: int) -> dict:
         SAMPLE_EVERY=0,
         CKPT_EVERY=10**9,
         WANDB_PROJECT=None,
-        LOG_EVERY=20,
+        FLUSH_EVERY=20,
     )
     if case["data"] == "synthetic":
         size = values["SIZE"]

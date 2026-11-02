@@ -57,7 +57,7 @@ def knobs(folder: Path, **changes) -> dict:
         MAX_STEPS=2,
         PRECISION="fp32",
         DEVICES=["cpu"],
-        LOG_EVERY=1,
+        FLUSH_EVERY=1,
         METRICS_EVERY=1,
         SAMPLE_EVERY=0,
         VAL_EVERY=0,

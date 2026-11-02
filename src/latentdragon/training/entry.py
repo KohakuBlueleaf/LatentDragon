@@ -271,7 +271,7 @@ def worker(rank: int, world: int, k: dict, script: str = "") -> None:
     state = TrainState()
     manager = CheckpointManager(run_dir / "checkpoints", k["CKPT_KEEP"], rank)
     _restore(k, run_dir, manager, state, task, bundles, ema, rank)
-    metric_log = MetricLog(_sinks(k, run_dir, rank, script), k["LOG_EVERY"])
+    metric_log = MetricLog(_sinks(k, run_dir, rank, script), k["FLUSH_EVERY"])
     if rank == 0:
         _summary(k, task, run_dir, metric_log.sinks)
     progress = None

@@ -18,6 +18,8 @@ EMA_KEYS = {
     "vq/perplexity": "raw/perplexity",
     "vq/perplexity_rate": "raw/perplexity_rate",
 }
+# Sections whose raw scalars also get a `<key>_ema` twin, for trends under per-step spikes
+TWIN_SECTIONS = ("train/", "vq/", "gan/", "optim/grad_norm/")
 DEFAULT_AUX_WEIGHTS = {"vq": 1.0, "kl": 0.0}
 DIRECT_KEYS = ("commitment_loss", "codebook_loss", "ivq_loss")
 
@@ -338,7 +340,7 @@ class AutoencoderTask(Task):
         return self.model.domain.to_frames(signal)
 
     def smooth_metrics(self, step: int, metrics: dict) -> dict:
-        """Add the EMA-smoothed headline scalars under their stable names."""
+        """Add the EMA-smoothed headline scalars under their stable names, and `_ema` twins."""
         out = dict(metrics)
         pairs = {
             "train/eloss": "train/nll",
@@ -349,6 +351,18 @@ class AutoencoderTask(Task):
         for name, source in pairs.items():
             if source in metrics:
                 out[name] = self.smooth.update(step, name, metrics[source])
+
+        # Every other raw scalar of those sections keeps its value and gains an EMA twin
+        smoothed = {*pairs, *pairs.values()}
+        raw = {
+            f"{key}_ema": value
+            for key, value in metrics.items()
+            if key.startswith(TWIN_SECTIONS)
+            and key not in smoothed
+            and not key.endswith("_ema")
+            and isinstance(value, torch.Tensor)
+        }
+        out.update(self.smooth.update_all(step, raw))
         return out
 
     def post_step(self, step: int, sync) -> None:
