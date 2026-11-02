@@ -30,6 +30,8 @@ RECIPE: str = "bench_taming_active"
 KNOBS: dict = {}
 DEVICE: str = "cuda:0"
 WARM: int = 8
+CENSUS_STEPS: int = 4  # consecutive steps counted after the warm-up
+RAISE: bool = False  # raise at the first sync and show the forward stack of its op
 OUT: Path = Path("runs/bench/sync_census.jsonl")
 
 
@@ -44,17 +46,46 @@ def knobs_of() -> dict:
     return {**values, "EPOCHS": 0, "MAX_STEPS": 100, **KNOBS}
 
 
+OWN_CODE = ("latentdragon", "sensecraft")
+
+
+def raise_at_sync(run: Callable[[], object]) -> None:
+    """Run with every host sync raising, and the forward stack of a failing backward node shown."""
+    torch.cuda.set_sync_debug_mode("error")
+    try:
+        with torch.autograd.detect_anomaly(check_nan=False):
+            run()
+    except RuntimeError as err:
+        frames = traceback.extract_tb(err.__traceback__)
+        own = [f for f in frames if any(name in f.filename for name in OWN_CODE)]
+        for frame in own[-4:] or frames[-4:]:
+            print(
+                f"  {Path(frame.filename).name}:{frame.lineno} {frame.line}", flush=True
+            )
+        print(f"sync raised: {str(err)[:400]}", flush=True)
+    finally:
+        torch.cuda.set_sync_debug_mode("default")
+
+
 def sync_sites(run: Callable[[], object]) -> dict[str, int]:
     """Host syncs raised by `run`, counted per innermost repo line of the stack."""
     sites: dict[str, int] = {}
 
     def note(message, *_) -> None:
-        if "synchronizing" not in str(message):
+        # PyTorch's notice that the debug mode is a prototype is not a sync
+        text = str(message)
+        if "synchronizing" not in text or "prototype" in text:
             return
-        frames = [f for f in traceback.extract_stack() if "latentdragon" in f.filename]
+        # The innermost frame of our code or sensecraft; none means the C++ autograd engine
+        stack = traceback.extract_stack()[:-1]
+        frames = [f for f in stack if any(name in f.filename for name in OWN_CODE)]
         where = "autograd thread"
         if frames:
-            where = f"{Path(frames[-1].filename).name}:{frames[-1].lineno} {frames[-1].line}"
+            frame = frames[-1]
+            where = f"{Path(frame.filename).name}:{frame.lineno} {frame.line}"
+        elif stack:
+            frame = stack[-1]
+            where = f"no own frame, innermost {Path(frame.filename).name}:{frame.lineno} {frame.line}"
         sites[where] = sites.get(where, 0) + 1
 
     shown = warnings.showwarning
@@ -94,8 +125,11 @@ def main() -> None:
 
     # Metric steps run extra code, so census both kinds
     rows = []
-    for step in (state.step + 1, state.step + 2):
+    for step in range(state.step + 1, state.step + 1 + CENSUS_STEPS):
         state.step = step * 10 if knobs["METRICS_EVERY"] == 1 else step
+        if RAISE:
+            raise_at_sync(lambda: driver.step(batch, state))
+            continue
         sites = sync_sites(lambda: driver.step(batch, state))
         rows.append({"recipe": RECIPE, "step": state.step, "sites": sites})
         print(f"step {state.step}: {sum(sites.values())} syncs", flush=True)
