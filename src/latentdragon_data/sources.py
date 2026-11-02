@@ -34,19 +34,20 @@ def scan_files(root: str, suffixes: tuple[str, ...]) -> np.ndarray:
 
 
 def cached_files(root: str, suffixes: tuple[str, ...], meta: str) -> np.ndarray:
-    """The file list from `<root>/<meta>`, scanning and caching when absent or empty."""
+    """The file list from `<root>/<meta>`, memory-mapped; scanned and cached when absent or empty.
+
+    A memory map is file-backed, so every rank and data worker shares one copy in the page
+    cache instead of holding its own: tens of millions of paths stay a few GB in total.
+    """
     path = os.path.join(root, meta)
-    if os.path.isfile(path):
-        files = np.load(path)
-        if len(files):
-            return files
-    files = scan_files(root, suffixes)
-    if len(files) == 0:
-        raise FileNotFoundError(f"no files under {root}")
-    temp = f"{path}.{os.getpid()}.tmp.npy"
-    np.save(temp, files)
-    os.replace(temp, path)
-    return files
+    if not os.path.isfile(path) or not len(np.load(path, mmap_mode="r")):
+        files = scan_files(root, suffixes)
+        if len(files) == 0:
+            raise FileNotFoundError(f"no files under {root}")
+        temp = f"{path}.{os.getpid()}.tmp.npy"
+        np.save(temp, files)
+        os.replace(temp, path)
+    return np.load(path, mmap_mode="r")
 
 
 class FileSource(Dataset):
@@ -62,7 +63,16 @@ class FileSource(Dataset):
     ):
         self.root = root
         self.transform = transform
+        self.meta = meta
         self.files = cached_files(root, self.suffixes, meta)
+
+    def __getstate__(self) -> dict:
+        # Pickling a memory map copies its contents; a worker re-opens the map instead
+        return {**self.__dict__, "files": None}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self.files = np.load(os.path.join(self.root, self.meta), mmap_mode="r")
 
     def __len__(self) -> int:
         return len(self.files)
