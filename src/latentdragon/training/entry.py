@@ -5,6 +5,7 @@ import functools
 import os
 import socket
 import sys
+import warnings
 from datetime import timedelta
 from pathlib import Path
 
@@ -63,6 +64,11 @@ from latentdragon_data import SOURCE, Concat, epoch_batches
 
 log = get_logger(__name__)
 
+# Triton's current default, made explicit: its next release turns FP fusion off by default
+FP_FUSION = ("TRITON_DEFAULT_FP_FUSION", "1")
+# An idle critic's schedule keeps counting global steps before its optimizer first steps
+SCHEDULE_FIRST = r"Detected call of `lr_scheduler.step\(\)` before `optimizer.step\(\)`"
+
 
 def free_port() -> int:
     """An unused local TCP port for the process group."""
@@ -114,6 +120,7 @@ def freeze_problems(arch, paths: list[str]) -> list[str]:
 def run(values: dict, script: str) -> None:
     """Script entry point: validate, then train on every device in `DEVICES`."""
     knobs = supplied_knobs(values)
+    os.environ.setdefault(*FP_FUSION)
     check(knobs, script)
     knobs["RUN_ID"] = knobs["RUN_ID"] or new_run_id()
     devices = knobs["DEVICES"]
@@ -236,6 +243,7 @@ def _start(rank: int, world: int, k: dict) -> tuple:
     """Process group, device, seed and run folder of this rank."""
     device = _device(k, rank)
     os.environ["RANK"] = str(rank)
+    warnings.filterwarnings("ignore", message=SCHEDULE_FIRST)
     if "cuda" in device:
         torch.cuda.set_device(device)
     if world > 1:
