@@ -3,6 +3,7 @@
 import copy
 
 import torch
+import torch.distributed as dist
 from sensecraft.metrics import psnr, ssim
 from torch.utils.data import DataLoader
 from torchmetrics.image.fid import FrechetInceptionDistance
@@ -11,8 +12,18 @@ from latentdragon.eval.usage import CodeTally, NoTally
 
 
 def new_fid(device) -> FrechetInceptionDistance:
-    """An FID metric keeping its real features across resets."""
+    """An FID metric keeping its real features across resets.
+
+    The first build downloads the Inception weights, so rank 0 builds first and the other
+    ranks wait, then load the cached file instead of downloading it at the same time.
+    """
+    distributed = dist.is_available() and dist.is_initialized()
+    first = not distributed or dist.get_rank() == 0
+    if not first:
+        dist.barrier()
     metric = FrechetInceptionDistance(reset_real_features=False, normalize=True)
+    if distributed and first:
+        dist.barrier()
     return metric.to(device).eval().requires_grad_(False)
 
 
