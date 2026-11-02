@@ -111,7 +111,7 @@ SCHEDULER_CONFIG = {"mode": "cosine", "min_value": 0.01, "warmup": 0, "end": -1}
 EMA_DECAY = 0.999  # 0 turns EMA off
 
 # --- cadence ---
-FLUSH_EVERY = 100  # every step is logged; this many rows share one device-to-host copy
+FLUSH_EVERY = 1  # rows per device-to-host copy; every step is logged one step late either way
 METRICS_EVERY = 1  # steps between PSNR, SSIM, latent and code-usage stats
 USAGE_WINDOW = 1000  # steps a code counts as used in vq/usage_window
 SAMPLE_EVERY = 1000

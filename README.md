@@ -243,8 +243,9 @@ Every knob problem is reported together, before any GPU work:
 written atomically and hold the weights, optimizer state, EMA, RNG state per GPU and the data
 position.
 
-**Logging.** Every step is logged, every metric on every step (`METRICS_EVERY=1`); rows are copied
-to the host in batches of `FLUSH_EVERY`. Rank 0 writes each row to `metrics.jsonl`; an interactive terminal shows a
+**Logging.** Every step is logged, every metric on every step (`METRICS_EVERY=1`). A step's values
+are copied to the host without blocking and written one step later on a writer thread, one row
+per step (`FLUSH_EVERY=1`); larger batches burst the writer and show as periodic slow steps. Rank 0 writes each row to `metrics.jsonl`; an interactive terminal shows a
 progress bar with the headline metrics, and a log file gets one line per flush. With
 `WANDB_PROJECT` set, the same rows go to wandb as Lightning's `WandbLogger` sends them: the run is
 named `NAME`, every row carries `trainer/global_step` and `epoch`, panels plot against
