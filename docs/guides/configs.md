@@ -8,9 +8,9 @@ compose them with `use_config`. The folder names the group, so files are named f
 (`precision/fp16.py`, `recipes/latentmaid/0222.py`). `use_config`
 replaces whole values, dicts included.
 
-Dataset roots come from environment variables, never from tracked paths:
-`LATENTDRAGON_DATA`, `LATENTDRAGON_TRAIN_ROOTS` (separated by the OS path separator) and
-`LATENTDRAGON_STAGE1`.
+Data is plain config: `TRAIN_SOURCES` is a list of sources, one per folder, and `VAL_SOURCE`
+is one source. `configs/ae/data/imagenet.py` names `data/imagenet/train` and `data/imagenet/val`;
+change the roots there or set both knobs in your own config.
 
 Architecture is `ARCH`, a dict of `AEArchConfig` fields written in the config; absent fields
 take their defaults. `configs/ae/arch/` holds the published layouts (`sdvae.py`,

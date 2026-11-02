@@ -39,7 +39,9 @@ TREE: Path = Path(
     "."
 )  # checkout holding the recipes and script; PYTHONPATH picks its `src`
 OUT: Path = Path("runs/bench/recipes.jsonl")
-IMAGENET: str = os.environ.get("LATENTDRAGON_DATA", "data")
+REAL_SOURCES: list | None = (
+    None  # replaces TRAIN_SOURCES on "real" cases; None keeps the recipe's
+)
 STEPS: int = 120
 WARM_STEPS: int = 6
 SCRATCH: Path = Path("runs/bench_tmp")
@@ -113,10 +115,8 @@ def knobs_of(case: dict, folder: str, steps: int) -> dict:
         shape = (frames, 3, size, size) if frames else (3, size, size)
         values["TRAIN_SOURCES"] = [{"name": "synthetic", "shape": shape}]
         values["NUM_WORKERS"] = 0
-    else:
-        values["TRAIN_SOURCES"] = [
-            {"name": "image_folder", "root": f"{IMAGENET}/train"}
-        ]
+    elif REAL_SOURCES is not None:
+        values["TRAIN_SOURCES"] = REAL_SOURCES
     values.update(case.get("knobs", {}))
     return values
 

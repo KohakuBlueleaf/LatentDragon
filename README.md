@@ -164,14 +164,13 @@ An `image_folder` source reads every `.jpg`, `.jpeg`, `.png` and `.webp` image u
 files are converted to RGB. The first run writes the file list to `imgonly_metadata_filtered.npy` in
 that root, so the folder must be writable once; later runs read that file and do not rescan. A `video_folder` source does the same for videos.
 
-The recipes read `LATENTDRAGON_DATA`, a folder with `imagenet/train` and `imagenet/val`.
-`configs/ae/data/multi.py` reads several roots from `LATENTDRAGON_TRAIN_ROOTS`, separated by the OS
-path separator.
+Data is plain config. The recipes take `configs/ae/data/imagenet.py`, which names
+`data/imagenet/train` and `data/imagenet/val`; change those roots, or set `TRAIN_SOURCES` (a list,
+one source per folder) and `VAL_SOURCE` in your own config.
 
 ## Train
 
 ```bash
-export LATENTDRAGON_DATA=/path/to/data
 kogine run scripts/train/ae.py --config configs/ae/recipes/latentmaid/0222.py
 ```
 

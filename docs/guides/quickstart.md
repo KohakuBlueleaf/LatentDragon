@@ -1,7 +1,7 @@
 # Quick start
 
 1. Install on Python 3.13: `uv pip install -e ".[kernels,wandb]"`.
-2. Point `LATENTDRAGON_DATA` at a folder with `imagenet/train` and `imagenet/val`.
+2. Set the roots in `configs/ae/data/imagenet.py` to your ImageNet `train` and `val` folders.
 3. Pick a recipe under `configs/ae/recipes/` and run it:
 
 ```bash

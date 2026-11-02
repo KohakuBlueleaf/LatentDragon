@@ -1,7 +1,4 @@
-"""ImageNet layout under $LATENTDRAGON_DATA: `imagenet/train` and `imagenet/val`."""
+"""ImageNet as image folders; change the roots to where your copy lives."""
 
-import os
-
-_ROOT = os.environ.get("LATENTDRAGON_DATA", "data")
-TRAIN_SOURCES = [{"name": "image_folder", "root": f"{_ROOT}/imagenet/train"}]
-VAL_SOURCE = {"name": "image_folder", "root": f"{_ROOT}/imagenet/val"}
+TRAIN_SOURCES = [{"name": "image_folder", "root": "data/imagenet/train"}]
+VAL_SOURCE = {"name": "image_folder", "root": "data/imagenet/val"}
