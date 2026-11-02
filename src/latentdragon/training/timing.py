@@ -1,4 +1,7 @@
-"""Step-time breakdown; phases accumulate seconds, `report` means them per step."""
+"""Step-time breakdown; phases accumulate seconds, `report` means them per step.
+
+Every phase is also an NVTX range, so a profiler timeline names the step's host work.
+"""
 
 import contextlib
 import time
@@ -27,10 +30,11 @@ class StepTimer:
 
     @contextlib.contextmanager
     def phase(self, name: str):
-        """Time a block under `name`."""
+        """Time a block under `name`, inside an NVTX range of that name."""
         self._edge()
         begin = time.perf_counter()
-        yield
+        with torch.cuda.nvtx.range(name):
+            yield
         self._edge()
         self.seconds[name] = self.seconds.get(name, 0.0) + time.perf_counter() - begin
         self.counts[name] = self.counts.get(name, 0) + 1

@@ -381,7 +381,8 @@ def latent_stats(raw: dict) -> dict:
     """Mean and std of every float latent tensor, and per channel along dim 1.
 
     One tensor keeps the research trainer's names (`train/z_mean`, `latent_stat_mean/ch00`);
-    several get their slot path in the per-channel key.
+    several get their slot path in the per-channel key. Per-channel values stay one vector per
+    stat, which the metric log writes as `.../ch00`, `.../ch01`, ...
     """
     found = {
         path: value.detach().float()
@@ -396,9 +397,8 @@ def latent_stats(raw: dict) -> dict:
             continue
         section = "" if len(found) == 1 else f"{path}/"
         channels = value.transpose(0, 1).flatten(1)
-        for channel, (mean, std) in enumerate(zip(channels.mean(1), channels.std(1))):
-            out[f"latent_stat_mean/{section}ch{channel:02}"] = mean
-            out[f"latent_stat_std/{section}ch{channel:02}"] = std
+        out[f"latent_stat_mean/{section}ch"] = channels.mean(1)
+        out[f"latent_stat_std/{section}ch"] = channels.std(1)
     return out
 
 

@@ -45,7 +45,9 @@ class Task:
         return tree.to_device(batch, device, self.memory_format)
 
     def reduce_metrics(self, per_micro: list[dict]) -> dict:
-        """Mean each key across the micro-batches that produced it."""
+        """Mean each key across the micro-batches that produced it; one micro passes through."""
+        if len(per_micro) == 1:
+            return per_micro[0]
         merged: dict = {}
         for out in per_micro:
             for key, value in out.items():
@@ -64,6 +66,7 @@ class Task:
 
 
 def _mean(values: list):
+    """The mean across micro-batches, element by element for vector values."""
     if isinstance(values[0], torch.Tensor):
-        return torch.stack([v.detach().float() for v in values]).mean()
+        return torch.stack([v.detach().float() for v in values]).mean(dim=0)
     return sum(values) / len(values)
