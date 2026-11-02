@@ -157,9 +157,14 @@ def build_bundles(task, k: dict, total_steps: int) -> dict[str, Bundle]:
 
     bundles = {}
     for name, groups in task.groups().items():
-        # Per-group learning rates scale the base LR.
+        # Per-group learning rates scale the base LR; the name labels the group's lr log
         params = [
-            {"params": g["params"], "lr": k["LR"] * g["lr_scale"]} for g in groups
+            {
+                "params": g["params"],
+                "lr": k["LR"] * g["lr_scale"],
+                "name": g.get("name", f"group{index}"),
+            }
+            for index, g in enumerate(groups)
         ]
         optimizer = build(
             k["OPTIMIZER"],

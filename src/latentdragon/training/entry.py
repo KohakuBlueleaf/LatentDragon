@@ -4,7 +4,9 @@ import dataclasses
 import functools
 import os
 import socket
+import sys
 from datetime import timedelta
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
@@ -30,7 +32,12 @@ from latentdragon.training.checkpoint import CheckpointManager, latest
 from latentdragon.training.checks import all_problems, compile_notes
 from latentdragon.training.drivers.native import Driver
 from latentdragon.training.logging.metrics import MetricLog
-from latentdragon.training.logging.sinks import ConsoleSink, JsonlSink, WandbSink
+from latentdragon.training.logging.sinks import (
+    ConsoleSink,
+    JsonlSink,
+    ProgressBar,
+    WandbSink,
+)
 from latentdragon.training.parallel import sync
 from latentdragon.training.precision import PRECISION
 from latentdragon.training.run_dir import (
@@ -114,9 +121,9 @@ def run(values: dict, script: str) -> None:
     if len(devices) > 1:
         os.environ.setdefault("MASTER_ADDR", "127.0.0.1")
         os.environ["MASTER_PORT"] = str(free_port())
-        mp.spawn(worker, args=(len(devices), knobs), nprocs=len(devices))
+        mp.spawn(worker, args=(len(devices), knobs, script), nprocs=len(devices))
         return
-    worker(0, 1, knobs)
+    worker(0, 1, knobs, script)
 
 
 def _device(knobs: dict, rank: int) -> str:
@@ -147,22 +154,30 @@ def _evaluator(k, domain, device, precision, rank, world):
     )
 
 
-def _sinks(k: dict, run_dir, rank: int) -> list:
-    """Metric sinks; only rank 0 writes, and wandb only when a project is set."""
+def _sinks(k: dict, run_dir, rank: int, script: str) -> list:
+    """Metric sinks; only rank 0 writes, and wandb only when a project is set.
+
+    An interactive terminal gets a progress bar; a log file gets one line per flush.
+    """
     if rank != 0:
         return []
-    sinks = [JsonlSink(run_dir / "metrics.jsonl"), ConsoleSink()]
+    sinks = [JsonlSink(run_dir / "metrics.jsonl")]
+    sinks.append(ConsoleSink() if not sys.stderr.isatty() else None)
     if k["WANDB_PROJECT"] is not None:
+        files = [Path(script), run_dir / "config.json", run_dir / "git.json"]
         sinks.append(
             WandbSink(
                 k["WANDB_PROJECT"],
                 k["NAME"],
                 jsonable(k),
-                id=k["WANDB_RUN_ID"],
-                resume="allow" if k["WANDB_RUN_ID"] else None,
+                run_dir,
+                [path for path in files if path.exists()],
+                run_id=k["WANDB_RUN_ID"],
+                resume=k["WANDB_RESUME"] or ("allow" if k["WANDB_RUN_ID"] else None),
+                offline=k["WANDB_OFFLINE"],
             )
         )
-    return sinks
+    return [sink for sink in sinks if sink is not None]
 
 
 def _restore(k, run_dir, manager, state, task, bundles, ema, rank) -> None:
@@ -199,6 +214,7 @@ def _callbacks(k, task, bundles, ema, manager, metric_log, env) -> list:
                 task.to_device(held, device),
                 run_dir / "samples",
                 functools.partial(precision.autocast, device_type),
+                metric_log.image,
             )
         )
     return callbacks
@@ -224,7 +240,7 @@ def _start(rank: int, world: int, k: dict) -> tuple:
     return device, run_dir
 
 
-def worker(rank: int, world: int, k: dict) -> None:
+def worker(rank: int, world: int, k: dict, script: str = "") -> None:
     """One rank of a run: assemble once, then hand over to the driver."""
     device, run_dir = _start(rank, world, k)
 
@@ -242,7 +258,15 @@ def worker(rank: int, world: int, k: dict) -> None:
     state = TrainState()
     manager = CheckpointManager(run_dir / "checkpoints", k["CKPT_KEEP"], rank)
     _restore(k, run_dir, manager, state, task, bundles, ema, rank)
-    metric_log = MetricLog(_sinks(k, run_dir, rank), k["LOG_EVERY"])
+    metric_log = MetricLog(_sinks(k, run_dir, rank, script), k["LOG_EVERY"])
+    progress = None
+    if rank == 0 and sys.stderr.isatty():
+        progress = ProgressBar(steps, state.step, k["NAME"])
+        metric_log.sinks.append(progress)
+    if rank == 0 and k["WANDB_WATCH"] > 0:
+        for sink in metric_log.sinks:
+            if isinstance(sink, WandbSink):
+                sink.watch(task.model, k["WANDB_WATCH"])
     env = (device, rank, world, domain, precision, run_dir, source)
     runner = CallbackRunner(_callbacks(k, task, bundles, ema, manager, metric_log, env))
 
@@ -262,9 +286,19 @@ def worker(rank: int, world: int, k: dict) -> None:
     timer = StepTimer(k["TIMING_EVERY"], device)
     driver = Driver(task, bundles, ema, precision, device, k["GRAD_ACC"], sync, timer)
 
+    images_per_step = k["BATCH_SIZE"] * world
+
     def end_step(current: TrainState, metrics: dict) -> None:
-        """Log the step's smoothed metrics, then fire due callbacks."""
-        metric_log.record(current.step, task.smooth_metrics(current.step, metrics))
+        """Log the step's smoothed metrics with epoch and host timing, then fire callbacks."""
+        values = task.smooth_metrics(current.step, metrics)
+        values["epoch"] = current.epoch
+        if len(timer.starts) > 1:
+            seconds = timer.starts[-1] - timer.starts[-2]
+            values["perf/step_time"] = seconds
+            values["perf/samples_per_sec"] = images_per_step / seconds
+        metric_log.record(current.step, values)
+        if progress is not None:
+            progress.advance(current.step)
         runner.step_end(current)
 
     # Train, then flush callbacks and logs and write the timing report.

@@ -1,7 +1,12 @@
-"""Metric sinks: a row is `{"step": int, **scalars}`."""
+"""Metric sinks: a row is `{"step": int, "epoch": int, **scalars}`; images go by file path.
+
+Every sink writes rows; a sink with `log_image` also takes sample grids.
+"""
 
 import json
 from pathlib import Path
+
+from tqdm import tqdm
 
 from latentdragon_common.log import get_logger
 
@@ -11,6 +16,10 @@ except ImportError:
     wandb = None
 
 log = get_logger(__name__)
+
+# The headline keys Lightning's progress bar showed in the research trainer
+HEADLINE = ("train/eloss", "train/psnr", "train/ssim", "vq/usage")
+STEP_KEY = "trainer/global_step"
 
 
 class JsonlSink:
@@ -36,28 +45,85 @@ class JsonlSink:
 
 
 class ConsoleSink:
-    """Logs the headline keys of each row."""
-
-    KEYS = ("train/eloss", "train/psnr", "vq/usage")
+    """Logs the headline keys and throughput of each row, for logs read after the fact."""
 
     def write(self, row: dict) -> None:
-        fields = {k: round(row[k], 4) for k in self.KEYS if k in row}
-        log.info("step", step=row["step"], **fields)
+        keys = (*HEADLINE, "perf/samples_per_sec")
+        fields = {key: round(row[key], 4) for key in keys if key in row}
+        log.info("step", step=row["step"], epoch=row.get("epoch"), **fields)
 
     def close(self) -> None:
         return None
 
 
-class WandbSink:
-    """Optional wandb run; construction fails loudly when wandb is missing."""
+class ProgressBar:
+    """A step bar with rate and ETA, its postfix the headline keys of the latest row."""
 
-    def __init__(self, project: str, name: str, config: dict, **kwargs):
-        if wandb is None:
-            raise ImportError("WANDB_PROJECT is set but wandb is not installed")
-        self.run = wandb.init(project=project, name=name, config=config, **kwargs)
+    def __init__(self, total: int, start: int, name: str):
+        self.bar = tqdm(total=total, initial=start, desc=name, dynamic_ncols=True)
+
+    def advance(self, step: int) -> None:
+        """Move the bar to `step`."""
+        self.bar.update(step - self.bar.n)
 
     def write(self, row: dict) -> None:
-        self.run.log({k: v for k, v in row.items() if k != "step"}, step=row["step"])
+        postfix = {
+            key.split("/")[-1]: f"{row[key]:.4g}" for key in HEADLINE if key in row
+        }
+        self.bar.set_postfix(postfix, refresh=False)
+
+    def close(self) -> None:
+        self.bar.close()
+
+
+class WandbSink:
+    """A wandb run that behaves like Lightning's `WandbLogger`.
+
+    Every row carries `trainer/global_step` and `epoch`, every metric is plotted against
+    `trainer/global_step`, and rows are logged without wandb's own step, so a resumed run or a
+    late validation row never trips wandb's increasing-step rule.
+    """
+
+    def __init__(
+        self,
+        project: str,
+        name: str,
+        config: dict,
+        run_dir: Path,
+        files: list[Path],
+        run_id: str | None = None,
+        resume: str | None = None,
+        offline: bool = False,
+    ):
+        if wandb is None:
+            raise ImportError("WANDB_PROJECT is set but wandb is not installed")
+        self.run = wandb.init(
+            project=project,
+            name=name,
+            id=run_id,
+            resume=resume,
+            config=config,
+            dir=str(run_dir),
+            mode="offline" if offline else "online",
+        )
+        self.run.define_metric(STEP_KEY)
+        self.run.define_metric("*", step_metric=STEP_KEY, step_sync=True)
+
+        # The script and the resolved knobs, as the research trainer saved its script
+        for path in files:
+            self.run.save(str(path), base_path=str(Path(path).parent), policy="now")
+
+    def write(self, row: dict) -> None:
+        values = {key: value for key, value in row.items() if key != "step"}
+        self.run.log({**values, STEP_KEY: row["step"]})
+
+    def log_image(self, step: int, key: str, path: Path) -> None:
+        """Upload one sample grid at `step`."""
+        self.run.log({key: wandb.Image(str(path)), STEP_KEY: step})
+
+    def watch(self, model, every: int) -> None:
+        """Gradient and parameter histograms of `model` every `every` steps."""
+        self.run.watch(model, log="all", log_freq=every)
 
     def close(self) -> None:
         self.run.finish()

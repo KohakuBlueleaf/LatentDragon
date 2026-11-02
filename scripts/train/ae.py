@@ -15,8 +15,13 @@ SEED = 20090220
 DEVICES: list[int | str] = ["cpu"]  # e.g. [0, 1, 2, 3]
 PRECISION = "bf16"  # bf16 | fp16 | fp32 | bf16-true | fp16-true
 CPU_THREADS = 2  # intra-op threads per rank; data workers are separate
-WANDB_PROJECT: str | None = None
+WANDB_PROJECT: str | None = None  # None turns wandb off; the run name is NAME
 WANDB_RUN_ID: str | None = None  # continue this wandb run
+WANDB_RESUME: str | None = (
+    None  # None | allow | must | never; allow when a run id is set
+)
+WANDB_OFFLINE = False  # keep the run local; `wandb sync` uploads it later
+WANDB_WATCH = 0  # log gradient and parameter histograms every N steps; 0 is off
 DIST_TIMEOUT_HOURS = 4
 RESUME: str | None = None  # a run folder to continue
 RESUME_IGNORE: list[str] = []  # knobs allowed to differ on resume

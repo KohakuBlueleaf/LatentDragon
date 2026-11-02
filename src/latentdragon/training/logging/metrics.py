@@ -63,6 +63,12 @@ class MetricLog:
             for sink in self.sinks:
                 sink.write(row)
 
+    def image(self, step: int, key: str, path) -> None:
+        """Send a sample grid file to every sink that takes images."""
+        for sink in self.sinks:
+            if hasattr(sink, "log_image"):
+                sink.log_image(step, key, path)
+
     def close(self) -> None:
         """Emit everything and close the sinks."""
         self.flush()

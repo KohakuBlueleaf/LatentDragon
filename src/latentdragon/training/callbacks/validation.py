@@ -4,6 +4,7 @@ from pathlib import Path
 
 import torch
 
+from latentdragon.domain.latents import pca_rgb
 from latentdragon.training.callbacks.runner import Callback
 
 
@@ -26,30 +27,50 @@ class ValidationCallback(Callback):
         with self.ema.swapped():
             metrics = self.evaluator.run(self.task, self.sync)
         self.task.train()
-        self.metric_log.record(state.step, metrics)
+        self.metric_log.record(state.step, {**metrics, "epoch": state.epoch})
 
 
 class SampleCallback(Callback):
-    """Writes a real-over-recon grid for a held batch to `samples/<step>.webp`."""
+    """Writes a sample grid of a held batch to `samples/<step>.webp` and publishes it.
 
-    def __init__(self, every, task, batch, out_dir, autocast):
+    Rows: the real images, the latent before quantization as RGB, the reconstruction, then one
+    reconstruction per nested latent level when the bottleneck has them.
+    """
+
+    KEY = "train/samples"
+
+    def __init__(self, every, task, batch, out_dir, autocast, publish):
         self.every = every
         self.task = task
         self.batch = batch
         self.out_dir = Path(out_dir)
         self.autocast = autocast
+        self.publish = publish
 
     @torch.no_grad()
     def on_step_end(self, state) -> None:
-        """Reconstruct the held batch and save the real-over-recon grid."""
+        """Reconstruct the held batch, save the grid and send it to the image sinks."""
         self.task.eval()
         with self.autocast():
-            recon, _ = self.task.reconstruct(self.batch)
+            recon, out = self.task.reconstruct(self.batch)
+            levels = self.task.model.bottleneck.eval_masks()
+            full = out.z.shape[1]
+            nested = [
+                self.task.reconstruct(self.batch, keep)[0]
+                for keep in levels
+                if keep < full
+            ]
         self.task.train()
 
-        grid = self.task.model.domain.to_grid(self.batch.float(), [recon.float()])
+        latents = out.raw if out.raw is not None else out.z
+        fakes = [fake.float() for fake in (recon, *nested)]
+        domain = self.task.model.domain
+        grid = domain.to_grid(self.batch.float(), fakes, pca_rgb(latents))
+
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        self.task.model.domain.save_grid(grid, self.out_dir / f"{state.step}.webp")
+        path = self.out_dir / f"{state.step}.webp"
+        domain.save_grid(grid, path)
+        self.publish(state.step, self.KEY, path)
 
 
 class CheckpointCallback(Callback):

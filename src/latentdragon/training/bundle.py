@@ -44,17 +44,29 @@ class Bundle:
         elif not bad.item():
             self.optimizer.step()
 
+    def _learning_rates(self) -> dict:
+        """The learning rate of each group, keyed by group name; older checkpoints have none."""
+        return {
+            f"optim/lr/{self.name}/{group.get('name', f'group{index}')}": group["lr"]
+            for index, group in enumerate(self.optimizer.param_groups)
+        }
+
     def step(self) -> dict[str, Tensor]:
         """Reduce, unscale, clip, step or skip, update scale, advance the schedule."""
         # A bundle with no gradient this step only advances its schedule
         grads = self.reducer.finish()
         if not grads:
             self.schedule.step()
-            return {}
+            return self._learning_rates()
 
         # Undo loss scaling, then clip to the norm limit
         self.scaler.unscale(grads)
         norm = clip_tensors(grads, self.clip)
+
+        # The learning rate each group steps with, and the scale this step's loss was under
+        logs = self._learning_rates()
+        if isinstance(self.scaler.value, Tensor):
+            logs[f"optim/loss_scale/{self.name}"] = self.scaler.value.detach().clone()
 
         # A non-finite norm skips the step and backs the scale off
         bad = (~torch.isfinite(norm)).to(torch.float32)
@@ -63,7 +75,9 @@ class Bundle:
         self.schedule.step()
         self.optimizer.zero_grad(set_to_none=True)
 
-        return {f"grad_norm/{self.name}": norm.detach(), f"skipped/{self.name}": bad}
+        logs[f"optim/grad_norm/{self.name}"] = norm.detach()
+        logs[f"optim/skipped/{self.name}"] = bad
+        return logs
 
     def state_dict(self) -> dict:
         """Optimizer, schedule and scaler state."""

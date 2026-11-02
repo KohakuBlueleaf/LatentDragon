@@ -13,7 +13,7 @@ from latentdragon.tasks.metrics import CodeUsage, NoUsage, ScalarEma
 from latentdragon_common.calls import nothing
 
 EMA_KEYS = {
-    "vq/loss": "aux/vq",
+    "vq/loss": "raw/vq_loss",
     "vq/usage": "raw/usage",
     "vq/perplexity": "raw/perplexity",
     "vq/perplexity_rate": "raw/perplexity_rate",
@@ -106,27 +106,31 @@ class AutoencoderTask(Task):
 
         # Model groups: encoder, trunk + head, bottleneck, each with its lr scale
         spec = [
-            (trainable(model.encoder), p.enc_lr_scale),
-            (trainable(model.trunk) + trainable(model.head), 1.0),
-            (trainable(model.bottleneck), p.vq_lr_scale),
+            ("encoder", trainable(model.encoder), p.enc_lr_scale),
+            ("decoder", trainable(model.trunk) + trainable(model.head), 1.0),
+            ("bottleneck", trainable(model.bottleneck), p.vq_lr_scale),
         ]
         out = {
             "model": [
-                {"params": params, "lr_scale": scale}
-                for params, scale in spec
+                {"params": params, "lr_scale": scale, "name": name}
+                for name, params, scale in spec
                 if params
             ]
         }
 
         if self.critic is not None:
             out["critic"] = [
-                {"params": trainable(self.critic), "lr_scale": p.disc_lr_scale}
+                {
+                    "params": trainable(self.critic),
+                    "lr_scale": p.disc_lr_scale,
+                    "name": "critic",
+                }
             ]
 
-        for term, _ in self.terms:
+        for index, (term, _) in enumerate(self.terms):
             params = trainable(term)
             if params:
-                group = {"params": params, "lr_scale": 1.0}
+                group = {"params": params, "lr_scale": 1.0, "name": f"term{index}"}
                 out.setdefault(term.group, []).append(group)
         return out
 
@@ -219,12 +223,16 @@ class AutoencoderTask(Task):
             logs = self._run_scheme(ctx, micros)
 
         # Collect metrics
+        # Sections: train/ as the research trainer named them, gan/ for the scheme, raw/ for
+        # values whose smoothed form is logged elsewhere
         metrics = {"train/nll": nll.detach()}
         metrics.update({f"train/{k}": v for k, v in terms.items()})
-        metrics.update({f"train/{k}": v for k, v in logs.items()})
-        metrics.update({f"aux/{k}": v.detach() for k, v in out.aux.items()})
+        metrics.update({f"gan/{k}": v for k, v in logs.items()})
         if "kl" in out.aux:
             metrics["train/kl"] = out.aux["kl"].detach()
+        metrics.update(
+            {f"raw/{k}_loss": v.detach() for k, v in out.aux.items() if k != "kl"}
+        )
         metrics.update(term_logs)
         metrics.update(self._bottleneck_metrics(out, ctx))
         metrics.update(self._quality(x, fake, out.raw, ctx.step, ctx.micro_index))
@@ -304,12 +312,22 @@ class AutoencoderTask(Task):
         with torch.autocast(x.device.type, enabled=False):
             flat_fake = self._frames(fake.detach().float()) * 0.5 + 0.5
             flat_real = self._frames(x.float()) * 0.5 + 0.5
-            return {
-                "quality/psnr": psnr(flat_fake, flat_real).mean(),
-                "quality/ssim": ssim(flat_fake, flat_real, 1.0).mean(),
-                "train/z_mean": raw.detach().float().mean(),
-                "train/z_std": raw.detach().float().std(),
+            latent = raw.detach().float()
+            out = {
+                "raw/psnr": psnr(flat_fake, flat_real).mean(),
+                "raw/ssim": ssim(flat_fake, flat_real, 1.0).mean(),
+                "train/z_mean": latent.mean(),
+                "train/z_std": latent.std(),
             }
+
+            # Per-channel latent stats, each in its own section as the research trainer had
+            channels = latent.transpose(0, 1).flatten(1)
+            for channel, (mean, std) in enumerate(
+                zip(channels.mean(1), channels.std(1))
+            ):
+                out[f"latent_stat_mean/ch{channel:02}"] = mean
+                out[f"latent_stat_std/ch{channel:02}"] = std
+            return out
 
     def _frames(self, signal: torch.Tensor) -> torch.Tensor:
         """A batch of 2D frames for image metrics."""
@@ -320,8 +338,8 @@ class AutoencoderTask(Task):
         out = dict(metrics)
         pairs = {
             "train/eloss": "train/nll",
-            "train/psnr": "quality/psnr",
-            "train/ssim": "quality/ssim",
+            "train/psnr": "raw/psnr",
+            "train/ssim": "raw/ssim",
             **EMA_KEYS,
         }
         for name, source in pairs.items():
