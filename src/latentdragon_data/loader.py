@@ -44,6 +44,7 @@ def epoch_batches(
     epoch: int = 0,
     batches: int = 0,
     pin_memory: bool = True,
+    prefetch: int = 4,
 ) -> Iterator[tuple]:
     """Endless `(batch, epoch, batches_consumed)`; full batches only."""
     sampler = EpochSampler(len(source), batch_size, rank, world, seed)
@@ -55,7 +56,8 @@ def epoch_batches(
         num_workers=workers,
         pin_memory=pin_memory,
         drop_last=True,
-        persistent_workers=False,
+        persistent_workers=workers > 0,
+        prefetch_factor=prefetch if workers > 0 else None,
     )
 
     # Roll over to the next epoch with a fresh permutation when one is exhausted

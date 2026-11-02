@@ -118,6 +118,21 @@ class VideoFolder(FileSource):
         return self.transform(torch.from_numpy(clip).permute(0, 3, 1, 2))
 
 
+@SOURCE.register("synthetic")
+class Synthetic(Dataset):
+    """Fixed random `shape` samples, for measuring a step without file reads."""
+
+    def __init__(self, transform=None, shape=(3, 256, 256), count: int = 4096):
+        self.count = count
+        self.sample = torch.rand(tuple(shape)) * 2 - 1
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __getitem__(self, index: int) -> torch.Tensor:
+        return self.sample
+
+
 class Concat(Dataset):
     """Several sources read as one index space."""
 
