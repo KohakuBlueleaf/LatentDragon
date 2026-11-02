@@ -17,11 +17,19 @@ mlp_project(base[groups, rows, in_dim], w1[groups, in_dim, hidden],
             b2[groups, 1, out_dim], act="silu", trainable_base=True)
     -> out[groups, rows, out_dim]
     w2 @ act(w1 @ base + b1) + b2 computed in at least fp32. `act` is one of
-    `ACTIVATIONS`. `trainable_base=False`: `base` gets no gradient.
+    `ACTIVATIONS`. `trainable_base=False`: `base` gets no gradient. The Triton gelu is the
+    tanh approximation and the eager one is exact, so the two backends differ on gelu.
+
+adam16(param, grad, exp_avg, exp_rms, bad, step, lr, betas, eps, weight_decay,
+       stochastic=False, seed=0) -> None
+    one in-place AdamW step in fp32 registers, state in its own dtype, `exp_rms` holding
+    the root of the second moment. Nothing moves when the device flag `bad` is set.
+    `stochastic` rounds 16-bit writebacks by distance.
 """
 
 QUANTIZE = "quantize"
 NEAREST = "nearest"
 MLP_PROJECT = "mlp_project"
-OPS = (QUANTIZE, NEAREST, MLP_PROJECT)
+ADAM16 = "adam16"
+OPS = (QUANTIZE, NEAREST, MLP_PROJECT, ADAM16)
 ACTIVATIONS = ("silu", "gelu", "mish")

@@ -1,7 +1,6 @@
 """Kernel precision against fp64, in fp16 and bf16, forward and backward.
 
-Question: do the Triton kernels stay within the rounding floor of the eager reference
-when both are measured against an fp64 eager run on the same inputs?
+Question: how far do the Triton kernels sit from fp64, next to plain PyTorch at the same dtype?
 
 Run: kogine run experiments/precision/kernels.py --set DEVICE=cuda:0
 Writes one JSON row per (op, shape, dtype, act, tensor) to OUTPUT. Needs a GPU.
@@ -14,7 +13,7 @@ import torch
 from torch import Tensor
 
 from latentdragon_kernels import resolve
-from latentdragon_kernels.error_stats import compare, worse
+from latentdragon_kernels.error_stats import compare
 from latentdragon_kernels.tuning import tuner
 
 DEVICE = "cuda"
@@ -26,7 +25,12 @@ ACTIVATIONS = ("silu", "gelu", "mish")
 # (rows, parts, codes, dim)
 QUANTIZE_SHAPES = ((4096, 4, 1024, 16), (65536, 8, 4096, 32), (1024, 1, 65536, 256))
 # (groups, rows, in_dim, hidden, out_dim)
-MLP_SHAPES = ((4, 1024, 16, 256, 48), (1, 4096, 64, 512, 256))
+MLP_SHAPES = (
+    (4, 1024, 16, 256, 48),
+    (1, 4096, 64, 512, 256),
+    (1, 65536, 16, 2048, 256),
+)
+MLP_BACKEND = "gemm"
 
 
 def _leaf(x: Tensor, dtype: torch.dtype | None = None) -> Tensor:
@@ -66,8 +70,7 @@ def _rows(meta: dict, kernel: dict, eager: dict, ref: dict) -> list[dict]:
     """One row per tensor of an op call."""
     rows = []
     for name, out in kernel.items():
-        table = compare(out, eager[name], ref[name])
-        rows.append({**meta, "tensor": name, **table, "worse": worse(table)})
+        rows.append({**meta, "tensor": name, **compare(out, eager[name], ref[name])})
     return rows
 
 
@@ -126,8 +129,8 @@ def _mlp_rows(shape: tuple, name: str, act: str, device: str) -> list[dict]:
     ]
     cotangent = torch.randn(groups, rows, out_dim, device=device, dtype=torch.float32)
 
-    # Triton kernel, eager at the test dtype, eager in fp64 as the reference
-    kernel_fn = resolve("mlp_project", device, backend="triton")
+    # The kernel, eager at the test dtype, eager in fp64 as the reference
+    kernel_fn = resolve("mlp_project", device, backend=MLP_BACKEND)
     eager_fn = resolve("mlp_project", device, backend="eager")
     typed = [x.to(dtype) for x in inputs]
     kernel = _run_mlp(kernel_fn, typed, cotangent, act, dtype)

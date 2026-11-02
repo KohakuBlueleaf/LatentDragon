@@ -15,7 +15,7 @@ import torch
 
 from latentdragon_common.log import get_logger
 from latentdragon_kernels.errors import NoImplementationError
-from latentdragon_kernels.hardware.arch import arch_of
+from latentdragon_kernels.hardware.arch import arch_of, family_of
 
 CACHE_ENV = "LATENTDRAGON_KERNEL_CACHE"
 MODES = ("on", "off")
@@ -148,6 +148,22 @@ def _time_all(kernel, device, key, candidates, launch, errors) -> dict:
     return best
 
 
+def _inherited(kernel, device, key, candidates) -> dict | None:
+    """A winner stored by another card of `device`'s family, when one fits."""
+    family = family_of(arch_of(device))
+    for folder in sorted((cache_dir() / "tuning").glob("*-sm*-torch*")):
+        arch = re.search(r"-(sm\d+)-torch", folder.name).group(1)
+        if family_of(arch) != family:
+            continue
+        stored = read_table(folder / f"{kernel}.json").get(key, {}).get("config")
+        if stored in candidates:
+            log.info(
+                "kernel config inherited", kernel=kernel, key=key, card=folder.name
+            )
+            return stored
+    return None
+
+
 def select(
     kernel: str,
     device: torch.device | str,
@@ -170,6 +186,8 @@ def select(
         row = read_table(table_path(kernel, device)).get(key, {})
         stored = row.get("config")
         chosen = stored if stored in candidates else None
+        if chosen is None:
+            chosen = _inherited(kernel, device, key, candidates)
 
     # No stored winner: time every candidate
     if chosen is None:

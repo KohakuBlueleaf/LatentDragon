@@ -1,28 +1,40 @@
-"""Error statistics of a result against an fp64 reference, next to the eager reference."""
+"""Precision report: a candidate and the baseline against an fp64 reference.
+
+The reference is an fp64 run. The baseline is plain PyTorch on the same input, weights and
+compute dtype. A mark sends a person to look at a row; it decides nothing.
+"""
 
 import torch
 from torch import Tensor
 from torch.nn.functional import cosine_similarity
 
-KEYS = ("cos_deficit", "abs_mean", "abs_median", "rel_mean", "rel_median")
+MARKED = (
+    "abs_max",
+    "abs_mean",
+    "abs_median",
+    "rel_max",
+    "rel_mean",
+    "rel_median",
+    "cos_deficit",
+)
+CLEAR_ISSUE = 10.0
+LARGE_DIFF = 2.0
 
 
 def stats(out: Tensor, ref: Tensor) -> dict[str, float | bool]:
-    """Cosine to `ref` and the abs and rel error mean, median and max of `out`."""
+    """Cosine to `ref` and the max, mean and median of the abs and rel error of `out`."""
     flat_out = out.detach().double().flatten()
     flat_ref = ref.detach().double().flatten()
 
-    # Absolute and relative error (relative over nonzero reference entries)
+    # Absolute and relative error; relative only where the reference is nonzero
     diff = (flat_out - flat_ref).abs()
     nonzero = flat_ref != 0
     rel = (
-        diff[nonzero] / flat_ref[nonzero].abs()
-        if bool(nonzero.any())
-        else diff.new_zeros(1)
+        diff[nonzero] / flat_ref[nonzero].abs() if nonzero.any() else diff.new_zeros(1)
     )
-    if flat_out.equal(flat_ref):
-        cos = 1.0
-    else:
+
+    cos = 1.0
+    if not flat_out.equal(flat_ref):
         cos = cosine_similarity(flat_out, flat_ref, dim=0).item()
 
     row = {
@@ -31,36 +43,30 @@ def stats(out: Tensor, ref: Tensor) -> dict[str, float | bool]:
         "cos_deficit": 1.0 - cos,
     }
     for name, values in (("abs", diff), ("rel", rel)):
+        row[f"{name}_max"] = values.max().item()
         row[f"{name}_mean"] = values.mean().item()
         row[f"{name}_median"] = values.median().item()
-        row[f"{name}_max"] = values.max().item()
     return row
 
 
-def floors(out: Tensor, ref64: Tensor) -> dict[str, float]:
-    """The rounding scale of `out`'s dtype per statistic of `KEYS`."""
-    eps = torch.finfo(out.dtype).eps
-    scale = ref64.detach().double().abs().flatten().median().item()
+def compare(out: Tensor, baseline: Tensor, ref64: Tensor) -> dict[str, dict]:
+    """The report row: `candidate` and `baseline` against `ref64`, and their ratios."""
+    candidate = stats(out, ref64)
+    plain = stats(baseline, ref64)
+    ratios = {key: candidate[key] / max(plain[key], 1e-300) for key in MARKED}
     return {
-        "cos_deficit": eps,
-        "abs_mean": eps * scale,
-        "abs_median": eps * scale,
-        "rel_mean": eps,
-        "rel_median": eps,
+        "candidate": candidate,
+        "baseline": plain,
+        "ratio": ratios,
+        "mark": mark(candidate, plain, ratios),
     }
 
 
-def compare(out: Tensor, eager: Tensor, ref64: Tensor) -> dict[str, dict]:
-    """The stats table: `kernel`, `eager` and the rounding `floor` against `ref64`."""
-    return {
-        "kernel": stats(out, ref64),
-        "eager": stats(eager, ref64),
-        "floor": floors(out, ref64),
-    }
-
-
-def worse(table: dict[str, dict], margin: float = 4.0) -> list[str]:
-    """Statistics where the kernel passes `margin` x the larger of eager and the floor."""
-    kernel, eager, floor = table["kernel"], table["eager"], table["floor"]
-    bad = [key for key in KEYS if kernel[key] > margin * max(eager[key], floor[key])]
-    return ["non-finite", *bad] if eager["finite"] and not kernel["finite"] else bad
+def mark(candidate: dict, baseline: dict, ratios: dict[str, float]) -> str | None:
+    """`clear issue`, `large diff` or None, from how far the candidate sits past the baseline."""
+    if baseline["finite"] and not candidate["finite"]:
+        return "clear issue"
+    worst = max(ratios[key] for key in MARKED)
+    if worst >= CLEAR_ISSUE:
+        return "clear issue"
+    return "large diff" if worst >= LARGE_DIFF else None

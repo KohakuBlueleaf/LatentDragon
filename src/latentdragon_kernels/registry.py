@@ -13,7 +13,7 @@ from latentdragon_common.log import get_logger
 from latentdragon_kernels.errors import NoImplementationError
 from latentdragon_kernels.hardware.arch import arch_of
 
-BACKENDS = ("triton", "eager")
+BACKENDS = ("gemm", "triton", "eager")
 log = get_logger("latentdragon.kernels")
 
 
@@ -27,9 +27,9 @@ class Impl:
 
 @dataclass
 class State:
-    """Everything registered in this process."""
+    """Everything registered in this process; an op holds one list per backend."""
 
-    impls: dict[str, dict[str, Impl]] = field(default_factory=dict)
+    impls: dict[str, dict[str, list[Impl]]] = field(default_factory=dict)
     unavailable: dict[str, str] = field(default_factory=dict)
     loaded: bool = False
 
@@ -43,8 +43,8 @@ def register(
     fn: Callable,
     supports: Callable[[str], str | None] | None = None,
 ) -> None:
-    """Register `fn` as `backend`'s implementation of `op`."""
-    STATE.impls.setdefault(op, {})[backend] = Impl(fn, supports)
+    """Add `fn` to `backend`'s implementations of `op`; newest first in `resolve`."""
+    STATE.impls.setdefault(op, {}).setdefault(backend, []).insert(0, Impl(fn, supports))
 
 
 def mark_unavailable(backend: str, reason: str) -> None:
@@ -64,14 +64,17 @@ def load_backends() -> None:
             mark_unavailable(name, str(err))
 
 
-def _reason(op: str, backend: str, arch: str) -> str | None:
-    """Why `backend` cannot serve `op` on `arch`, or None."""
+def _pick(op: str, backend: str, arch: str) -> tuple[Impl | None, str]:
+    """The first of `backend`'s `op` implementations serving `arch`, or why there is none."""
     if backend in STATE.unavailable:
-        return f"unavailable ({STATE.unavailable[backend]})"
-    impl = STATE.impls.get(op, {}).get(backend)
-    if impl is None:
-        return "not implemented"
-    return None if impl.supports is None else impl.supports(arch)
+        return None, f"unavailable ({STATE.unavailable[backend]})"
+    reasons = []
+    for impl in STATE.impls.get(op, {}).get(backend, ()):
+        reason = None if impl.supports is None else impl.supports(arch)
+        if reason is None:
+            return impl, ""
+        reasons.append(reason)
+    return None, "; ".join(reasons) or "not implemented"
 
 
 def resolve(
@@ -84,9 +87,9 @@ def resolve(
 
     # First backend in priority order that can serve the op on this arch
     for name in (backend,) if backend else BACKENDS:
-        why = _reason(op, name, arch)
-        if why is None:
+        impl, why = _pick(op, name, arch)
+        if impl is not None:
             log.info("kernel bound", op=op, arch=arch, backend=name)
-            return STATE.impls[op][name].fn
+            return impl.fn
         reasons.append(f"{name}: {why}")
     raise NoImplementationError(f"{op} on {arch}: " + "; ".join(reasons))
