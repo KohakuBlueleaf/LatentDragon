@@ -1,6 +1,7 @@
 """Vector quantization: indices are the stored latent, the codebook reads them back."""
 
 import torch
+import torch.nn.functional as F
 from torch import Tensor
 
 from latentdragon.model.core.contracts import LATENT, Encoded
@@ -16,13 +17,24 @@ class VQLatent(TensorLatent):
     The latent slot holds `{"codes": straight-through vectors, "indices": global indices}`
     while training and evaluating; `pack` keeps only the indices, and `deserialize` looks a
     packed latent up in the same codebook. `dim` is the channel count of the slot.
+
+    `normalize="rms"` puts each partition of the input on unit RMS before quantizing, with no
+    learned scale, so the encoder output the codebook sees cannot drift in scale.
     """
 
     def __init__(
-        self, dim: int, quantizer: str | dict, input: str = "h", output: str = "z"
+        self,
+        dim: int,
+        quantizer: str | dict,
+        normalize: str | None = None,
+        input: str = "h",
+        output: str = "z",
     ):
         super().__init__(input, output)
+        if normalize not in (None, "rms"):
+            raise ValueError(f"normalize must be None or 'rms', got {normalize!r}")
         self.vq = build(quantizer, QUANTIZER, emb_dim=dim)
+        self.normalize = normalize
 
     @property
     def quantizer(self):
@@ -46,10 +58,19 @@ class VQLatent(TensorLatent):
         """Forward to the quantizer."""
         self.vq.track_stats = on
 
+    def _normalized(self, raw: Tensor) -> Tensor:
+        """Channels-last `raw`, each partition on unit RMS when `normalize` is set."""
+        last = raw.movedim(1, -1)
+        if self.normalize is None:
+            return last
+        parts = last.unflatten(-1, (self.vq.partitions, self.vq.e_dim))
+        return F.rms_norm(parts, (self.vq.e_dim,)).flatten(-2)
+
     def encode(self, raw: Tensor, offset: int) -> Encoded:
         """Quantize `raw`; the quantizer info splits into the loss and `vq/` logs."""
-        # Channels-first to channels-last for the quantizer
-        out, info = self.vq(raw.movedim(1, -1))
+        # Channels-first to channels-last for the quantizer, each partition normalized
+        last = self._normalized(raw)
+        out, info = self.vq(last)
 
         indices = info.pop("indices")
         vq_loss = info.pop("vq_loss")
@@ -57,7 +78,7 @@ class VQLatent(TensorLatent):
             latent={self.output: {"codes": out.movedim(-1, 1), "indices": indices}},
             losses={"vq": vq_loss},
             logs={f"vq/{key}": value.detach() for key, value in info.items()},
-            extras={"raw": raw},
+            extras={"raw": last.movedim(-1, 1)},
         )
 
     def read(self, value: dict) -> Tensor:

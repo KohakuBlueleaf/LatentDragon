@@ -18,10 +18,10 @@ LEGACY_NORMS = {
 OFF_VALUES = {
     "addon_mlp": 0,
     "use_grouped_swiglu": False,
-    "latent_norm": False,
-    "latent_norm_partitions": 1,
     "t_mix_first": False,
 }
+# The encoder's latent norm is the vq latent def's `normalize="rms"`, read separately
+LATENT_NORM_KEYS = ("latent_norm", "latent_norm_partitions")
 DROPPED = ("diff_head_config", "variational", "logvar_clamp")
 UNPORTED_VQ = {
     "softbwd_mode": None,
@@ -85,12 +85,29 @@ def legacy_quantizer(vq_mode: str, vq_config: dict) -> dict:
     return {"name": vq_mode, **spec}
 
 
+def _latent_norm(enc: dict, quantizer: dict | None) -> str | None:
+    """`"rms"` when the legacy encoder normalized its output per vq partition, else None."""
+    if not enc.get("latent_norm", False):
+        return None
+    if quantizer is None:
+        raise ValueError("enc_config.latent_norm without a vq is not ported")
+    partitions = enc.get("latent_norm_partitions", 1)
+    if partitions != quantizer.get("partitions", 1):
+        raise ValueError(
+            f"latent_norm_partitions {partitions} differs from the vq partitions; not ported"
+        )
+    return "rms"
+
+
 def _bottleneck(hparams: dict) -> Any:
     """The bottleneck spec (vq, kl or identity, optionally nested) of legacy hparams."""
     variational = hparams.get("variational", False)
     if hparams.get("vq_mode") is not None:
         quantizer = legacy_quantizer(hparams["vq_mode"], hparams.get("vq_config") or {})
         vq = {"name": "vq", "quantizer": quantizer}
+        normalize = _latent_norm(hparams["enc_config"], quantizer)
+        if normalize is not None:
+            vq["normalize"] = normalize
         parts = hparams.get("nested_parts")
         if not parts:
             return vq
@@ -102,6 +119,7 @@ def _bottleneck(hparams: dict) -> Any:
             "jitter": 1,
         }
     enc = hparams["enc_config"]
+    _latent_norm(enc, None)
     inner = "identity"
     if variational:
         clamp = enc.get("logvar_clamp")
@@ -124,6 +142,8 @@ def from_legacy_hparams(hparams: dict) -> dict:
     enc, dec = hparams["enc_config"], hparams["dec_config"]
     _refuse_active(enc, "enc_config")
     _refuse_active(dec, "dec_config")
+    if dec.get("latent_norm", False):
+        raise ValueError("dec_config.latent_norm is not ported")
     video = bool(hparams.get("is_video", False))
     flat = dict(
         domain="video" if video else "image",
@@ -199,6 +219,9 @@ def to_legacy_hparams(arch: dict) -> dict:
     if name == "vq":
         vq = nested["inner"] if nested is not None else cfg["bottleneck"]
         spec = dict(vq["quantizer"])
+        if vq.get("normalize") == "rms":
+            enc["latent_norm"] = True
+            enc["latent_norm_partitions"] = spec.get("partitions", 1)
         out["vq_mode"] = spec.pop("name")
         if spec.get("partition_mode") == "shared":
             spec["partition_mode"] = None
