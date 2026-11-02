@@ -8,7 +8,7 @@ from kohakuengine import use_config
 from sensecraft.loss import DinoV3LossConfig, GeneralConfig, LPIPSConfig
 
 use_config("../data/data_multi.py")
-use_config("../precision/precision_bf16.py")
+use_config("../precision/precision_fp16.py")
 
 # Run identity, architecture and data loading
 NAME = "kvq_f16c256_production"
@@ -46,7 +46,9 @@ BATCH_SIZE = 32
 GRAD_ACC = 1
 EPOCHS = 1
 GRAD_CLIP = 1.0
-GRAD_CKPT = True
+GRAD_CKPT = False
+COMPILE = "model"
+COMPILE_LOSS = True
 
 # Optimizer, schedule and EMA
 LR = 0.0002

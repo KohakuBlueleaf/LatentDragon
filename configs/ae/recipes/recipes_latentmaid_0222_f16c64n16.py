@@ -7,7 +7,7 @@ from kohakuengine import use_config
 from sensecraft.loss import GeneralConfig, LPIPSConfig
 
 use_config("../data/data_imagenet.py")
-use_config("../precision/precision_bf16.py")
+use_config("../precision/precision_fp16.py")
 
 # Run identity, architecture and data loading
 NAME = "latentmaid_0222_f16c64n16"
@@ -45,6 +45,8 @@ GRAD_ACC = 1
 EPOCHS = 20
 GRAD_CLIP = 1.0
 GRAD_CKPT = True
+COMPILE = "model"
+COMPILE_LOSS = True
 
 # Optimizer, schedule and EMA
 LR = 0.000192
