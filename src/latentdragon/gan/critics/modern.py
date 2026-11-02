@@ -2,6 +2,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.nn.utils.parametrizations import spectral_norm
 
 from latentdragon.gan.critics.base import CRITIC, Critic
@@ -21,10 +22,27 @@ class RMSNorm2d(nn.Module):
         return x * rms * self.weight[None, :, None, None]
 
 
+class LayerNorm2d(nn.Module):
+    """Channel-wise LayerNorm on NCHW maps."""
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.bias = nn.Parameter(torch.zeros(dim))
+        self.eps = eps
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x.permute(0, 2, 3, 1)
+        x = F.layer_norm(x, (x.shape[-1],), self.weight, self.bias, self.eps)
+        return x.permute(0, 3, 1, 2)
+
+
 def _norm_layer(norm: str | None, channels: int) -> nn.Module:
     match norm:
         case "rms":
             return RMSNorm2d(channels)
+        case "layer":
+            return LayerNorm2d(channels)
         case "group":
             return nn.GroupNorm(min(32, channels), channels)
         case None | "none":
