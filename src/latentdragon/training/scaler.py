@@ -25,10 +25,11 @@ class NoScaler:
 
 
 class DynamicScaler:
-    """Backs off on a non-finite step, grows after `interval` finite ones.
+    """Backs off on a non-finite step, grows after `interval` finite ones, all on the device.
 
-    Overflow flags add up on the device and are read every `poll` steps, so most steps stay
-    free of host reads. A flagged step is skipped on the device whatever the scale does.
+    The scale and the count of finite steps are device tensors, created on the loss's device at
+    the first `scale`, and `update` changes them with PyTorch's own scale-update kernel, so no
+    step reads the host. A flagged step is skipped on the device by the optimizer.
     """
 
     def __init__(
@@ -38,58 +39,52 @@ class DynamicScaler:
         backoff: float = 0.5,
         interval: int = 2000,
         maximum: float = 2.0**15,
-        poll: int = 8,
     ):
-        self.value = init
         self.growth = growth
         self.backoff = backoff
         self.interval = interval
         self.maximum = maximum
-        self.good = 0
-        self.poll = poll
-        self.waiting = 0
-        self.flags: torch.Tensor | None = None
+
+        # Host values until the first `scale` gives the device
+        self._initial = (init, 0)
+        self.current: torch.Tensor | None = None
+        self.good: torch.Tensor | None = None
+
+    @property
+    def value(self) -> torch.Tensor | float:
+        """The scale: a device tensor once bound, the initial value before."""
+        return self._initial[0] if self.current is None else self.current
+
+    def _bind(self, device: torch.device) -> None:
+        """Move the scale and the finite-step count to `device`."""
+        scale, good = self._initial
+        self.current = torch.full((), scale, dtype=torch.float32, device=device)
+        self.good = torch.full((), good, dtype=torch.int32, device=device)
 
     def scale(self, loss: torch.Tensor) -> torch.Tensor:
-        return loss * self.value
+        if self.current is None:
+            self._bind(loss.device)
+        return loss * self.current
 
     def unscale(self, grads: list[torch.Tensor]) -> None:
-        torch._foreach_mul_(grads, 1.0 / self.value)
+        torch._foreach_mul_(grads, self.current.reciprocal())
 
     def update(self, bad: torch.Tensor) -> None:
-        """Add this step's flag; settle the scale when a poll comes due."""
-        self.flags = bad if self.flags is None else self.flags + bad
-        self.waiting += 1
-        if self.waiting >= self.poll:
-            self._settle()
-
-    def _settle(self) -> None:
-        """Read the flags: back off on any overflow, otherwise count the clean steps."""
-        if self.flags is None:
-            return
-        overflowed = self.flags.item() > 0
-        steps, self.waiting, self.flags = self.waiting, 0, None
-        if overflowed:
-            self.value *= self.backoff
-            self.good = 0
-            return
-        self.good += steps
-        if self.good >= self.interval:
-            self.value = min(self.value * self.growth, self.maximum)
-            self.good = 0
+        """Back off on `bad`, else count a finite step and grow every `interval` of them."""
+        found_inf = bad.to(device=self.current.device, dtype=torch.float32)
+        torch._amp_update_scale_(
+            self.current, self.good, found_inf, self.growth, self.backoff, self.interval
+        )
+        self.current.clamp_(max=self.maximum)
 
     def state_dict(self) -> dict:
-        """The scale and the unsettled steps; reading it changes nothing, as one rank saves."""
-        flagged = self.flags is not None and self.flags.item() > 0
-        return {
-            "value": self.value,
-            "good": self.good,
-            "waiting": self.waiting,
-            "flagged": flagged,
-        }
+        """The scale and the finite-step count; the read waits for the device, changes nothing."""
+        if self.current is None:
+            scale, good = self._initial
+            return {"value": scale, "good": good}
+        return {"value": self.current.item(), "good": int(self.good.item())}
 
     def load_state_dict(self, state: dict) -> None:
-        self.value = state["value"]
-        self.good = state["good"]
-        self.waiting = state.get("waiting", 0)
-        self.flags = torch.tensor(float(state.get("flagged", False)))
+        self._initial = (float(state["value"]), int(state["good"]))
+        if self.current is not None:
+            self._bind(self.current.device)

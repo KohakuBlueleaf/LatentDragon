@@ -13,11 +13,14 @@ def leaf_forward(ctx: GanCtx) -> tuple:
 
 
 def grad_penalty(
-    logits: torch.Tensor, inputs: torch.Tensor, scale: float = 1.0
+    logits: torch.Tensor, inputs: torch.Tensor, scale: torch.Tensor | float = 1.0
 ) -> torch.Tensor:
-    """Mean squared input-gradient norm, in fp32, keeping the graph."""
+    """Mean squared input-gradient norm, in fp32, keeping the graph.
+
+    `scale` may be the loss scale as a device tensor; it multiplies the seed, so no host read.
+    """
     count = logits.numel()
-    seed = torch.full_like(logits, scale / count)
+    seed = torch.ones_like(logits) * (scale / count)
     grad = torch.autograd.grad(
         logits, inputs, grad_outputs=seed, retain_graph=True, create_graph=True
     )[0]

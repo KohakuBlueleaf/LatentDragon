@@ -10,7 +10,7 @@ models and stop at the first failure.
 | `python checks/load.py` | presets, state dict keys, converters, exports | every preset builds; native, legacy and diffusers files rebuild the same model |
 | `python checks/config.py` | knobs, config validation, recipes | every recipe is valid; bad knobs are reported together before device work |
 | `python checks/reducer.py` | reducer, bundle, backward order | two ranks through each reducer give the gradients of one rank on the whole batch |
-| `python checks/scaler.py` | loss scaler, checkpoint contents | a save leaves the scaler untouched on the saving rank; a pending overflow survives a resume |
+| `python checks/scaler.py` | loss scaler, checkpoint contents | the scaler backs off, grows and caps on the device, and a resume continues its count |
 | `python checks/repo_rules.py` | package imports, or anything before a PR | file length, ASCII, in-function imports, import direction |
 
 A change that touches none of this needs none of them; adding a module does not affect resume.
