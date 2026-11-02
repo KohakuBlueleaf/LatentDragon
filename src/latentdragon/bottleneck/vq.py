@@ -31,6 +31,10 @@ class VQBottleneck(Bottleneck):
         """Forward to the quantizer."""
         self.vq.bind_kernels(device)
 
+    def track_stats(self, on: bool) -> None:
+        """Forward to the quantizer."""
+        self.vq.track_stats = on
+
     def forward(self, raw: Tensor, offset: int = 0) -> BottleneckOut:
         """Quantize `raw` and split the quantizer info into loss, metrics and indices."""
         # Channels-first to channels-last for the quantizer

@@ -13,6 +13,7 @@ class Task:
     """Owns modules and losses; never loops, steps optimizers or touches scalers."""
 
     ema_group = "model"
+    memory_format = torch.preserve_format
 
     def groups(self) -> dict[str, list[dict]]:
         """Optimizer param groups per bundle name, each with `params` and `lr_scale`."""
@@ -35,7 +36,7 @@ class Task:
         return batch.chunk(micro_count, dim=0)
 
     def to_device(self, batch: torch.Tensor, device) -> torch.Tensor:
-        return batch.to(device, non_blocking=True)
+        return batch.to(device, non_blocking=True, memory_format=self.memory_format)
 
     def reduce_metrics(self, per_micro: list[dict]) -> dict:
         """Mean each key across the micro-batches that produced it."""

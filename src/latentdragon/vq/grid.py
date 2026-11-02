@@ -44,6 +44,7 @@ class GridQuantizer(nn.Module):
         self._index_tail = (partitions,) if levels == 1 else (partitions, levels)
         self._stats = select_stats(self.codebook_size, self.n_embed, partitions, levels)
         self._ivq_terms = ivq_terms if ivq_loss_weight > 0 else no_ivq_terms
+        self.track_stats = True
         self.bind_kernels("cpu")
 
     def bind_kernels(self, device: torch.device | str) -> None:
@@ -81,8 +82,10 @@ class GridQuantizer(nn.Module):
         # Straight-through output, global indices and usage stats
         out = (z_p + (z_q - z_p).detach()).reshape(*head, self.emb_dim)
         indices = local + self.index_offsets
-        with torch.no_grad():
-            stats = self._stats(indices, local)
+        stats = {}
+        if self.track_stats:
+            with torch.no_grad():
+                stats = self._stats(indices, local)
         info = {
             "indices": indices.reshape(*head, *self._index_tail),
             "vq_loss": vq_loss,

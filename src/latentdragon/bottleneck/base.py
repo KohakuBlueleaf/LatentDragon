@@ -26,6 +26,9 @@ class Bottleneck(nn.Module):
     def bind_kernels(self, device: torch.device | str) -> None:
         """Resolve kernels for `device`; nothing by default."""
 
+    def track_stats(self, on: bool) -> None:
+        """Turn statistics that only feed logs on or off; nothing by default."""
+
 
 @BOTTLENECK.register("identity")
 class IdentityBottleneck(Bottleneck):

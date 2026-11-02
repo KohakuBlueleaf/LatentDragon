@@ -37,9 +37,10 @@ class Taming:
         if ctx.micro_index < ctx.micro_count - 1:
             return {}
         cached, self.cache = self.cache, []
-        for m, _, _, _ in cached:
+        for index, (m, _, _, _) in enumerate(cached):
             ctx.backward_g(
-                composed_scalar(m, m.recon_seed / ctx.micro_count, ctx.micro_count)
+                composed_scalar(m, m.recon_seed / ctx.micro_count, ctx.micro_count),
+                final=index == len(cached) - 1,
             )
         for m, _, _, _ in cached:
             ctx.critic(m.real.contiguous().detach())
@@ -65,15 +66,16 @@ class Taming:
 
         # Last micro: generator backward with the adaptive GAN weight, then critic
         d_adaptive = self._adaptive_ratio(ctx)
-        scale = (d_adaptive * self.disc_weight).item()
+        scale = d_adaptive * self.disc_weight
         cached, self.cache = self.cache, []
-        for mm, seed, _, _ in cached:
+        for index, (mm, seed, _, _) in enumerate(cached):
             ctx.backward_g(
                 composed_scalar(
                     mm,
                     mm.recon_seed / micro_count + (scale / micro_count) * seed,
                     micro_count,
-                )
+                ),
+                final=index == len(cached) - 1,
             )
         return self._critic_pass(ctx, cached, d_adaptive, scale)
 
@@ -123,11 +125,12 @@ class Taming:
     def _adaptive_ratio(self, ctx: GanCtx) -> torch.Tensor:
         """Clipped ratio of nll to gan gradient norms across ranks (1 if off)."""
         if not self.adaptive:
-            return torch.tensor(1.0)
-        ctx.sync.all_mean_(self.nll_last)
-        ctx.sync.all_mean_(self.gan_last)
+            return torch.ones((), device=ctx.m.fake.device)
+
+        # One all-reduce for both anchor gradients
+        both = ctx.sync.all_mean_(torch.stack([self.nll_last, self.gan_last]))
         low, high = self.adaptive_clip
-        ratio = self.nll_last.float().norm() / (self.gan_last.float().norm() + 1e-4)
+        ratio = both[0].float().norm() / (both[1].float().norm() + 1e-4)
         return ratio.clamp(low, high).detach()
 
     def _critic_pass(self, ctx, cached, d_adaptive, scale) -> dict:
@@ -135,20 +138,20 @@ class Taming:
         micro_count = ctx.micro_count
         d_total = torch.zeros((), device=ctx.m.fake.device)
         real_mean, fake_mean = 0.0, 0.0
-        for mm, _, _, held in cached:
+        for index, (mm, _, _, held) in enumerate(cached):
             logits_real = ctx.critic(mm.real.contiguous().detach())
             logits_fake = self.critic_fake(ctx, mm, held)
-            real_mean += logits_real.detach().mean().item() / micro_count
-            fake_mean += logits_fake.detach().mean().item() / micro_count
+            real_mean = real_mean + logits_real.detach().mean() / micro_count
+            fake_mean = fake_mean + logits_fake.detach().mean() / micro_count
             d_loss = self.disc_weight * self.disc_loss(logits_real, logits_fake)
-            ctx.backward_d(d_loss / micro_count)
+            ctx.backward_d(d_loss / micro_count, final=index == len(cached) - 1)
             d_total = d_total + d_loss.detach() / micro_count
         g_losses = torch.stack([g for _, _, g, _ in cached])
         return {
             "logits_real": real_mean,
             "logits_fake": fake_mean,
             "gan_scale": scale,
-            "d_adaptive": float(d_adaptive),
+            "d_adaptive": d_adaptive,
             "g_loss": g_losses.mean(),
             "d_loss": d_total,
         }
@@ -189,5 +192,6 @@ def taming(
         disc_start,
         policy.active,
         recon_only,
+        retained_backward=True,
         policy=policy,
     )

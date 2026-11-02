@@ -108,6 +108,10 @@ class NestedBottleneck(Bottleneck):
         """Forward to the wrapped bottleneck."""
         self.inner.bind_kernels(device)
 
+    def track_stats(self, on: bool) -> None:
+        """Forward to the wrapped bottleneck."""
+        self.inner.track_stats(on)
+
     def forward(self, raw: Tensor, offset: int = 0) -> BottleneckOut:
         """Run the wrapped bottleneck, then mask each training latent's channels."""
         out = self.inner(raw, offset)

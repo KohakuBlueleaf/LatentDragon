@@ -25,7 +25,7 @@ def _active(disc_weight: float, gamma: float, ctx: GanCtx) -> dict:
     r1 = grad_penalty(d_real, real, ctx.seed_scale)
     r2 = grad_penalty(d_fake, fake, ctx.seed_scale)
     d_loss = d_adv + 0.5 * gamma * (r1 + r2)
-    ctx.backward_d(d_loss / micro_count)
+    ctx.backward_d(d_loss / micro_count, final=ctx.micro_index == micro_count - 1)
     return {
         "g_loss": g_loss.detach(),
         "d_loss": d_loss.detach(),
@@ -42,5 +42,8 @@ def r3gan(
 ) -> GanScheme:
     """Relativistic GAN with zero-centred R1 and R2 penalties."""
     return GanScheme(
-        "r3gan", disc_start, functools.partial(_active, disc_weight, gamma)
+        "r3gan",
+        disc_start,
+        functools.partial(_active, disc_weight, gamma),
+        second_order=True,
     )

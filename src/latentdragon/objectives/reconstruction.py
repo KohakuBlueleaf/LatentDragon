@@ -20,8 +20,24 @@ class ReconstructionObjective:
             .eval()
         )
 
-    def to(self, device) -> "ReconstructionObjective":
+    def compile(self, **kwargs) -> None:
+        """Compile every loss network; parameter-free losses stay eager."""
+        for module in self.loss.loss_modules.values():
+            if any(True for _ in module.parameters()):
+                module.compile(**kwargs)
+
+    def to(
+        self, device, weights: torch.dtype | None = None
+    ) -> "ReconstructionObjective":
+        """Move the loss networks; `weights` holds their frozen weights in that dtype.
+
+        Under autocast a weight is cast on every forward, and frozen weights round the same
+        way each time, so holding them in the compute dtype removes the casts and nothing else.
+        """
         self.loss.to(device)
+        if weights is not None:
+            for param in self.loss.parameters():
+                param.data = param.data.to(weights)
         return self
 
     def __call__(self, x: torch.Tensor, x_hat: torch.Tensor) -> tuple:

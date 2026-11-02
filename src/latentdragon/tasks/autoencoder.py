@@ -1,6 +1,5 @@
 """Autoencoder task: encode, bottleneck, views, decode, seeds, terms, composed backward."""
 
-import functools
 from dataclasses import dataclass, field
 
 import torch
@@ -143,9 +142,9 @@ class AutoencoderTask(Task):
     def ema_named_params(self) -> dict[str, torch.nn.Parameter]:
         return {n: p for n, p in self.model.named_parameters() if p.requires_grad}
 
-    def bind_device(self, device) -> None:
-        """Bind kernels, move the objective and teachers, open the usage window."""
-        self.objective.to(device)
+    def bind_device(self, device, loss_weights: torch.dtype | None = None) -> None:
+        """Move the objective and teachers, open the usage window."""
+        self.objective.to(device, loss_weights)
         for teacher in self.parts.teachers.values():
             teacher.to(device)
         size = getattr(self.model.bottleneck, "codebook_size", 0)
@@ -162,6 +161,7 @@ class AutoencoderTask(Task):
 
     def eval(self) -> None:
         self.model.eval()
+        self.model.bottleneck.track_stats(True)
 
     def _live_aux(self, out) -> list:
         """Weighted `(weight, scalar)` aux losses of a bottleneck output."""
@@ -176,7 +176,7 @@ class AutoencoderTask(Task):
         """Decode `z`; returns `(fake, d nll / d fake, nll, term logs)`."""
         fake = self._render(self._decode(z)).float()
         nll, terms = self.objective(x, fake)
-        seed = seed_of(nll, fake, scale, retain_graph=True)
+        seed = seed_of(nll, fake, scale)
         return fake, seed, nll, terms
 
     def _teacher_features(self, x) -> dict:
@@ -189,13 +189,14 @@ class AutoencoderTask(Task):
         aux, logs = [], {}
         for term, weigh in self.terms:
             loss, term_logs = term(latent)
-            aux.append((float(weigh(loss, latent, anchor)), loss))
+            aux.append((weigh(loss, latent, anchor), loss))
             logs.update(term_logs)
         return aux, logs
 
     def micro_step(self, ctx) -> dict:
         """Encode, quantize, decode, apply terms and views, run the GAN scheme."""
         x = ctx.batch
+        self.model.bottleneck.track_stats(ctx.step % self._metric_every == 0)
 
         # Encode and decode the main view
         with ctx.timer.phase("encode"):
@@ -249,9 +250,10 @@ class AutoencoderTask(Task):
         )
         backward_d = ctx.backward.get("critic", nothing)
         backward_g = ctx.backward["model"]
+        pending: list = []
         if count > 1:
             self._share_across_views(micros, count)
-            backward_g = functools.partial(backward_g, retain_graph=True)
+            backward_g = _Deferred(pending)
         logs: dict = {}
         for index, micro in enumerate(micros):
             logs.update(
@@ -269,6 +271,11 @@ class AutoencoderTask(Task):
                     )
                 )
             )
+
+        # Views share the encoder's graph, so they take one backward together
+        if pending:
+            final = ctx.micro_index == ctx.micro_count - 1
+            ctx.backward["model"](sum(pending), final=final)
         return logs
 
     @staticmethod
@@ -335,6 +342,16 @@ class AutoencoderTask(Task):
         out = self.model.bottleneck(self.model.encode(x))
         z = out.z if keep_channels is None else zero_tail(out.z, keep_channels)
         return self.model.head(self.model.decode(z)), out
+
+
+class _Deferred:
+    """Stands in for a generator backward; the task sums what it collects."""
+
+    def __init__(self, pending: list):
+        self.pending = pending
+
+    def __call__(self, scalar: torch.Tensor, final: bool = False) -> None:
+        self.pending.append(scalar)
 
 
 def no_grad_if(held: bool, call):

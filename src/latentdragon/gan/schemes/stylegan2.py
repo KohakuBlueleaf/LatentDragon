@@ -24,7 +24,7 @@ def _active(disc_weight: float, gamma: float, ctx: GanCtx) -> dict:
     d_adv = F.softplus(-d_real).mean() + F.softplus(d_fake).mean()
     r1 = grad_penalty(d_real, real, ctx.seed_scale)
     d_loss = d_adv + 0.5 * gamma * r1
-    ctx.backward_d(d_loss / micro_count)
+    ctx.backward_d(d_loss / micro_count, final=ctx.micro_index == micro_count - 1)
     return {
         "g_loss": g_loss.detach(),
         "d_loss": d_loss.detach(),
@@ -40,5 +40,8 @@ def stylegan2(
 ) -> GanScheme:
     """Logistic GAN with R1; no lazy regularization or path-length term."""
     return GanScheme(
-        "stylegan2", disc_start, functools.partial(_active, disc_weight, gamma)
+        "stylegan2",
+        disc_start,
+        functools.partial(_active, disc_weight, gamma),
+        second_order=True,
     )

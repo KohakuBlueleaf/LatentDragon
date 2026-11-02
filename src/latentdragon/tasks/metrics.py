@@ -47,6 +47,6 @@ class CodeUsage:
         """Close the step: share marks across ranks and move the window."""
         sync.all_max_(self.used)
         self.counts.sub_(stride).clamp_(min=0.0)
-        self.counts[self.used > 0] = self.window
+        self.counts.masked_fill_(self.used > 0, self.window)
         self.used.zero_()
         return {"vq/usage_ema": (self.counts > 0).float().mean()}

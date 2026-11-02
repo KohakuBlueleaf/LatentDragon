@@ -28,8 +28,8 @@ class GanCtx:
     micro_index: int
     micro_count: int
     critic: torch.nn.Module | None
-    backward_g: Callable[[torch.Tensor], None]
-    backward_d: Callable[[torch.Tensor], None]
+    backward_g: Callable[..., None]
+    backward_d: Callable[..., None]
     anchor: torch.Tensor
     sync: object
     seed_scale: float = 1.0
@@ -66,7 +66,8 @@ def gen_backward(ctx: GanCtx, adv_term: torch.Tensor | None) -> None:
     seed = ctx.m.recon_seed / ctx.micro_count
     if adv_term is not None:
         seed = seed + adv_term
-    ctx.backward_g(composed_scalar(ctx.m, seed, ctx.micro_count))
+    final = ctx.micro_index == ctx.micro_count - 1
+    ctx.backward_g(composed_scalar(ctx.m, seed, ctx.micro_count), final=final)
 
 
 def recon_only(ctx: GanCtx) -> dict:
@@ -90,6 +91,10 @@ class GanScheme:
     idle: Callable[[GanCtx], dict] = recon_only
     uses_critic: bool = True
     problems: Callable[[dict], list[str]] = no_problems
+    second_order: bool = (
+        False  # backward through a gradient, which no compiled graph does
+    )
+    retained_backward: bool = False  # walks one graph twice under `retain_graph`
 
     def for_critic(self, critic) -> "GanScheme":
         """This scheme specialised for a built critic; default is unchanged."""
