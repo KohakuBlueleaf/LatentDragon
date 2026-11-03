@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 
-from latentdragon.model.nn.layers import RMSNorm, SwiGLU
+from latentdragon.model.nn.layers import RMSNorm, SwiGLU, UnitRowConv2d, UnitRowLinear
 from latentdragon.model.nn.temporal import CausalTemporalConv, SpatialDWConv
 from latentdragon.model.runtime.compile import compile_wrapper
 from latentdragon_common.registry import Registry, build
@@ -45,7 +45,8 @@ def init_writers(module: nn.Module, mode: str) -> None:
 
     Writers come from the family's `mup_init` at std `fan_in ** -0.5`; scaling them by
     `fan_in ** -0.5` gives the output-layer std `1 / fan_in` without drawing new values, so
-    every other parameter keeps its init. `"hidden"` leaves the writers as they are.
+    every other parameter keeps its init. A unit-row writer's raw scale never reaches its
+    output, so its gain takes the same factor instead. `"hidden"` leaves the writers as they are.
     """
     if mode not in WRITER_INITS:
         raise ValueError(f"writer_init must be one of {WRITER_INITS}, got {mode!r}")
@@ -55,31 +56,50 @@ def init_writers(module: nn.Module, mode: str) -> None:
         for block in module.modules():
             if isinstance(block, Block) and block.writer is not None:
                 weight = block.writer.weight
-                weight.mul_(math.prod(weight.shape[1:]) ** -0.5)
+                gain = getattr(block.writer, "gain", None)
+                scaled = weight if gain is None else gain
+                scaled.mul_(math.prod(weight.shape[1:]) ** -0.5)
                 if block.writer.bias is not None:
                     block.writer.bias.zero_()
 
 
-def _channel_mlp(in_dim: int, mlp_dim: int, out_dim: int) -> nn.Module:
-    """A SwiGLU channel mixer, or a plain linear when `mlp_dim` is 0."""
-    return (
-        SwiGLU(in_dim, mlp_dim, out_dim) if mlp_dim > 0 else nn.Linear(in_dim, out_dim)
-    )
+def _channel_mlp(
+    in_dim: int, mlp_dim: int, out_dim: int, unit_rows: bool = False
+) -> nn.Module:
+    """A SwiGLU channel mixer, or a single linear when `mlp_dim` is 0."""
+    if mlp_dim > 0:
+        return SwiGLU(in_dim, mlp_dim, out_dim, unit_rows)
+    if unit_rows:
+        return UnitRowLinear(in_dim, out_dim, gain=True)
+    return nn.Linear(in_dim, out_dim)
 
 
 @BLOCK.register("mlp")
 class BasicBlock(Block):
-    """Norm, depthwise 3x3, channel MLP, residual."""
+    """Norm, depthwise 3x3, channel MLP, residual.
+
+    `unit_rows` gives every layer in the block unit-norm rows: the depthwise filters and the
+    MLP input projection carry no scale of their own, the writer carries a per-channel gain,
+    and the norm drops its affine. Biases stay.
+    """
 
     spatial_reach = 1
 
     def __init__(
-        self, in_dim: int, mlp_dim: int, out_dim: int, norm_layer: Callable = RMSNorm
+        self,
+        in_dim: int,
+        mlp_dim: int,
+        out_dim: int,
+        norm_layer: Callable = RMSNorm,
+        unit_rows: bool = False,
     ):
         super().__init__()
-        self.norm = norm_layer(in_dim)
-        self.mixer = nn.Conv2d(in_dim, in_dim, 3, 1, 1, groups=in_dim)
-        self.swiglu = _channel_mlp(in_dim, mlp_dim, out_dim)
+        self.norm = (
+            norm_layer(in_dim, affine=False) if unit_rows else norm_layer(in_dim)
+        )
+        mixer = UnitRowConv2d if unit_rows else nn.Conv2d
+        self.mixer = mixer(in_dim, in_dim, 3, 1, 1, groups=in_dim)
+        self.swiglu = _channel_mlp(in_dim, mlp_dim, out_dim, unit_rows)
 
     @property
     def writer(self) -> nn.Module:
@@ -106,7 +126,12 @@ class PlainBlock(BasicBlock):
 
 @BLOCK.register("res")
 class BasicResBlock(Block):
-    """SD-style block: two rounds of norm, activation, 3x3 conv, with a skip."""
+    """SD-style block: two rounds of norm, activation, 3x3 conv, with a skip.
+
+    `unit_rows` gives every conv in the block unit-norm rows: the first conv and the 1x1 skip
+    carry no scale of their own, the second conv (the writer) carries a per-channel gain, and
+    both norms drop their affine. Biases stay.
+    """
 
     spatial_reach = 2
 
@@ -116,17 +141,19 @@ class BasicResBlock(Block):
         out_dim: int,
         norm_layer: Callable = RMSNorm,
         act: Callable = nn.SiLU,
+        unit_rows: bool = False,
     ):
         super().__init__()
-        self.norm1 = norm_layer(in_dim)
+        norm = (lambda dim: norm_layer(dim, affine=False)) if unit_rows else norm_layer
+        conv = UnitRowConv2d if unit_rows else nn.Conv2d
+        writer = {"gain": True} if unit_rows else {}
+        self.norm1 = norm(in_dim)
         self.nonlin1 = act()
-        self.conv1 = nn.Conv2d(in_dim, out_dim, 3, 1, 1)
-        self.norm2 = norm_layer(out_dim)
+        self.conv1 = conv(in_dim, out_dim, 3, 1, 1)
+        self.norm2 = norm(out_dim)
         self.nonlin2 = act()
-        self.conv2 = nn.Conv2d(out_dim, out_dim, 3, 1, 1)
-        self.skip = (
-            nn.Conv2d(in_dim, out_dim, 1) if in_dim != out_dim else nn.Identity()
-        )
+        self.conv2 = conv(out_dim, out_dim, 3, 1, 1, **writer)
+        self.skip = conv(in_dim, out_dim, 1) if in_dim != out_dim else nn.Identity()
 
     @property
     def writer(self) -> nn.Module:

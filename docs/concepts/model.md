@@ -106,6 +106,21 @@ Attention slots differ per family:
 
 The video families have no attention slots.
 
+## Unit-row blocks
+
+The `mlp` and `res` blocks take `unit_rows`, set through the block spec:
+`"block": {"name": "mlp", "unit_rows": True}`. Every linear and conv inside the block then
+applies its weight with unit-norm rows, so the raw weight's scale never reaches an activation:
+Adam's growth of a raw weight only shrinks its later steps, and the block's hidden states and
+writes stay bounded. The block's norms drop their affine, and its writer (`swiglu.out`, or
+`conv2` in `res`) carries a per-channel gain, the only scale the block owns. Biases stay.
+Layers outside the blocks (stage projections, attention slots, the encoder's output projection,
+the head) are unchanged.
+
+`writer_init="output"` scales a unit-row writer's gain by `fan_in ** -0.5` in place of its
+weight, which gives the same initial write. The rows are normalized at use, so EMA weights and
+loaded checkpoints need no extra step.
+
 ## Init
 
 Each part runs `mup_init`; the `conv` head then runs `mup_init_output` on its projection. When
