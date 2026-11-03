@@ -41,7 +41,9 @@ class ConvHead(TensorPart):
 
     `video` applies the projection per frame of a `(B, T, C, H, W)` slot. `standardize`
     makes every projection row zero-mean and unit-norm at each call, fixing the head's scale.
-    `zero_init` starts the projection's weight and bias at zero. `fp32` runs the head outside
+    `zero_init` starts the projection's weight and bias at zero. `preserve_init` keeps the hidden
+    std `fan_in ** -0.5` instead of the output-layer `1 / fan_in`, so a unit-RMS input gives a
+    near unit-RMS output and the head starts at a scale its slow drift keeps. `fp32` runs the head outside
     autocast on an fp32 input, and keeps its weights fp32 under the `-true` precisions, so
     the weight gradient's sum over every output position never lands in 16 bits.
     """
@@ -59,6 +61,7 @@ class ConvHead(TensorPart):
         video: bool = False,
         standardize: bool = False,
         zero_init: bool = False,
+        preserve_init: bool = False,
         fp32: bool = False,
         input: str = "y",
         output: str = "x",
@@ -67,6 +70,10 @@ class ConvHead(TensorPart):
         self.fp32 = fp32
         if standardize and zero_init:
             raise ValueError("a standardized row needs a direction; zero_init has none")
+        if preserve_init and zero_init:
+            raise ValueError(
+                "preserve_init and zero_init are two different inits; pick one"
+            )
         conv = {
             (False, False): nn.Conv2d,
             (True, False): SpatialConv2d,
@@ -77,7 +84,10 @@ class ConvHead(TensorPart):
         self.act = ACTS[act]() if act else nn.Identity()
         self.proj = conv(in_channels, out_channels, kernel_size, 1, kernel_size // 2)
         mup_init(self.parameters())
-        mup_init_output(self.proj.weight)
+        if preserve_init:
+            nn.init.zeros_(self.proj.bias)
+        else:
+            mup_init_output(self.proj.weight)
         if zero_init:
             nn.init.zeros_(self.proj.weight)
             nn.init.zeros_(self.proj.bias)
