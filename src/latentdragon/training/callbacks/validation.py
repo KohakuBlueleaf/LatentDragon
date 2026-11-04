@@ -38,8 +38,8 @@ class SampleCallback(Callback):
     `samples/train/<step>.webp` under `train/samples`; the held batch, the same at every step,
     goes to `samples/fixed/<step>.webp` under `train/samples_fixed`. Rows come from the
     domain's `to_grid`: the real samples, the first latent tensor of the latent def's continuous
-    view as RGB, the reconstruction, then one reconstruction per eval variant of the latent def
-    below the full latent. A domain without a grid draws none.
+    view as RGB, one reconstruction per eval variant of the latent def below the full latent
+    (smallest first), then the full reconstruction last. A domain without a grid draws none.
     """
 
     def __init__(self, every, task, held, out_dir, autocast, publish, count: int = 8):
@@ -73,7 +73,7 @@ class SampleCallback(Callback):
             partial = [self.task.reconstruct(batch, v)[0] for v in variants[:-1]]
 
         fakes = [
-            tree.map_tensors(lambda t: t.float(), fake) for fake in (recon, *partial)
+            tree.map_tensors(lambda t: t.float(), fake) for fake in (*partial, recon)
         ]
         grid = domain.to_grid(batch, fakes, preview(latent_def.raw(encoded)))
 
