@@ -106,5 +106,7 @@ class ConvHead(TensorPart):
         """Project features to the output."""
         if not self.fp32:
             return self.proj(self.act(self.norm(features)))
+        # The head's own fp32 weights set the dtype, so an fp64 model stays fp64
         with torch.autocast(features.device.type, enabled=False):
-            return self.proj(self.act(self.norm(features.float())))
+            features = features.to(self.proj.weight.dtype)
+            return self.proj(self.act(self.norm(features)))
