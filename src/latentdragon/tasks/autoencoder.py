@@ -72,6 +72,8 @@ class AutoencoderTask(Task):
         self.adv_views = [v for v in self.views if v.adversarial]
         self.plain_views = [v for v in self.views if not v.adversarial]
         self.term_modules = torch.nn.ModuleList([t for t, _ in self.terms])
+        for term, _ in self.terms:
+            term.bind(self.model)
         self._aux_weights = dict(parts.aux_weights)
         self.smooth = ScalarEma()
         self.usage = NoUsage()
@@ -366,10 +368,12 @@ class AutoencoderTask(Task):
         return out
 
     def post_step(self, step: int, sync) -> None:
-        """Share a stat-tracking critic's buffers from rank 0."""
+        """Share a stat-tracking critic's buffers from rank 0, then each term's own step."""
         if self.critic is not None and self.critic.tracks_stats:
             for buffer in self.critic.buffers():
                 sync.broadcast_(buffer)
+        for term, _ in self.terms:
+            term.post_step(step, sync)
 
     @torch.no_grad()
     def reconstruct(self, x: dict, variant=None) -> tuple:

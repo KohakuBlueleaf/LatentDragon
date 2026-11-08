@@ -22,6 +22,18 @@ class LatentTerm(torch.nn.Module):
         """The model parts a term built from `spec` trains; `requires` unless overridden."""
         return cls.requires
 
+    def bind(self, model: torch.nn.Module) -> None:
+        """Called once with the uncompiled model, before it moves to the device.
+
+        A term that runs its own passes keeps the parts it calls here, outside its own
+        submodules so their parameters stay the model's, and builds modules sized from them.
+        """
+        return None
+
+    def post_step(self, step: int, sync) -> None:
+        """Once per optimizer step, after the weight EMA; sync shared term state here."""
+        return None
+
     def forward(self, ctx: LatentCtx) -> tuple:
         """Compute `(loss, logs)` from the context; subclasses implement it."""
         raise NotImplementedError
