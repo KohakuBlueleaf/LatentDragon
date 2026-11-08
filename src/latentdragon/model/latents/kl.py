@@ -21,6 +21,8 @@ class KLLatent(TensorLatent):
     eval mode, and the KL is the `kl` loss.
     """
 
+    input_factor = 2
+
     def __init__(
         self,
         input: str = "h",

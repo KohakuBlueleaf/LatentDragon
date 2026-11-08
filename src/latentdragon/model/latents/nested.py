@@ -51,6 +51,8 @@ class NestedLatent(TensorLatent):
     ):
         super().__init__(input, output)
         defaults = {"input": input, "output": output}
+        if isinstance(inner, dict) and inner.get("name") == "bottleneck":
+            raise ValueError("put the nested def inside the bottleneck, not around it")
         if isinstance(inner, dict) and inner.get("name") in ("vq", "nested"):
             defaults["dim"] = dim
         self.inner = build(inner, LATENT, **defaults)
@@ -97,6 +99,11 @@ class NestedLatent(TensorLatent):
             if name in ("codebook_size", "quantizer", "codes"):
                 return getattr(self.inner, name)
             raise
+
+    @property
+    def input_factor(self) -> int:
+        """The wrapped def's."""
+        return self.inner.input_factor
 
     def init_from_encoder(self, layer) -> None:
         """Forward to the wrapped def."""

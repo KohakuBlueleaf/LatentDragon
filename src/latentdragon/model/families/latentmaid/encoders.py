@@ -1,7 +1,9 @@
 """LatentMaid encoders: pixel-unshuffle stages of MLP blocks, for images and video.
 
 Each reads one data slot and writes one encoder slot with channels at dim 1. `out_channels` is
-what the latent def downstream reads, e.g. twice the latent channels for `kl`. `writer_init="output"`
+what the latent def downstream reads, e.g. twice the latent channels for `kl`; `None` skips the
+output projection, so the encoder output is the last stage itself and a `bottleneck` latent def
+holds the 1x1 down to the latent. `writer_init="output"`
 gives every block's residual writer the output-layer init instead of the hidden one.
 """
 
@@ -40,7 +42,7 @@ class ShuffleEncoder(TensorPart):
     def __init__(
         self,
         in_channels: int,
-        out_channels: int,
+        out_channels: int | None,
         specs: Sequence[StageSpec],
         attn: Sequence[int] | None,
         norm: str | Callable,
@@ -71,14 +73,24 @@ class ShuffleEncoder(TensorPart):
         self.stage_projs = nn.ModuleList(stage_projs)
         self.temporal_stages = nn.ModuleList(fusers)
         self.attn_blocks = attn_slots(attn, hidden_dims, norm_layer)
-        self.out_proj = conv(dim, out_channels, 1)
+        self.out_channels = dim if out_channels is None else out_channels
+        self.out_proj = (
+            nn.Identity() if out_channels is None else conv(dim, out_channels, 1)
+        )
         mup_init(self.parameters())
         init_writers(self.stages, writer_init)
 
     @property
     def last_layer(self) -> nn.Module:
-        """The output projection."""
-        return self.out_proj
+        """The layer that writes the encoder output: the projection, else the last writer."""
+        if not isinstance(self.out_proj, nn.Identity):
+            return self.out_proj
+        for stage, proj in zip(reversed(self.stages), reversed(self.stage_projs)):
+            if len(stage):
+                return stage[-1].writer
+            if not isinstance(proj, nn.Identity):
+                return proj
+        raise ValueError("an encoder without blocks or projections has no last layer")
 
     @property
     def spatial_scale(self) -> int:
@@ -147,7 +159,7 @@ class LatentMaidEncoder(ShuffleEncoder):
 
     def __init__(
         self,
-        out_channels: int,
+        out_channels: int | None,
         stages: Sequence[Sequence[int]],
         in_channels: int = 3,
         attn: Sequence[int] | None = None,
@@ -177,7 +189,7 @@ class LatentMaidVideoEncoder(ShuffleEncoder):
 
     def __init__(
         self,
-        out_channels: int,
+        out_channels: int | None,
         stages: Sequence[Sequence[int]],
         in_channels: int = 3,
         norm: str | Callable = "rms",

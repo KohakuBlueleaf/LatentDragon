@@ -11,8 +11,11 @@ class TensorLatent(LatentDef):
     """A latent def over one encoder slot and one latent slot of the same name downstream.
 
     Subclasses implement `encode(raw, offset) -> Encoded` on the tensor and, when the latent
-    slot holds more than the decoder input, `read(value) -> Tensor`.
+    slot holds more than the decoder input, `read(value) -> Tensor`. `input_factor` is the
+    encoder channels read per latent channel.
     """
+
+    input_factor = 1
 
     def __init__(self, input: str = "h", output: str = "z"):
         super().__init__()

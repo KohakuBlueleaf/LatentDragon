@@ -153,6 +153,65 @@ def diffusers_folder_loads(folder) -> None:
     assert torch.equal(loaded.encode(x).latent_dist.mean, expected)
 
 
+def bottleneck_is_the_original_layout(folder) -> None:
+    """A bare encoder, a `bottleneck` and a decoder at its first-stage width compute the
+    original LatentMaid model, given its encoder output and decoder input 1x1s; a nested def
+    inside masks the latent before the up conv, and a `kl` inner gets twice the channels.
+    """
+    encoder = {"name": "latentmaid", "stages": [[2, 16, 16, 1]], "norm": "layer"}
+    decoder = {"name": "latentmaid", "stages": [[2, 16, 16, 1]], "norm": "layer"}
+    head = {"name": "conv", "in_channels": 4}
+    torch.manual_seed(0)
+    plain = build_autoencoder(
+        {
+            "encoder": {**encoder, "out_channels": 4},
+            "latent": "identity",
+            "decoder": {**decoder, "in_channels": 4},
+            "head": head,
+        }
+    ).double()
+    split_arch = {
+        "encoder": {**encoder, "out_channels": None},
+        "latent": {
+            "name": "bottleneck",
+            "in_channels": 16,
+            "dim": 4,
+            "out_channels": 16,
+            "inner": {"name": "nested", "latent_chs": [2]},
+        },
+        "decoder": {**decoder, "in_channels": 16},
+        "head": head,
+    }
+    split = build_autoencoder(split_arch).double().eval()
+    state = plain.state_dict()
+    for old, new in (
+        ("encoder.out_proj", "latent.down"),
+        ("decoder.stage_projs.0", "latent.up"),
+    ):
+        for kind in ("weight", "bias"):
+            state[f"{new}.{kind}"] = state.pop(f"{old}.{kind}")
+    split.load_state_dict(state, strict=True)
+    assert isinstance(split.decoder.stage_projs[0], torch.nn.Identity)
+    assert split.encoder.out_channels == 16
+    assert split.encoder.last_layer is split.encoder.stages[-1][-1].writer
+    x = {"x": torch.randn(2, 3, 8, 8, dtype=torch.float64)}
+    assert torch.equal(plain.eval()(x)[0]["x"], split(x)[0]["x"])
+
+    # The variant masks the 4-channel latent, then the up conv reads it
+    with torch.no_grad():
+        latent = split.encode(x).latent
+        half = split.latent.variant(latent, 2)
+        z = latent["z"].clone()
+        z[:, 2:] = 0
+        assert torch.equal(split.latent.deserialize(half)["z"], split.latent.up(z))
+
+    kl = build_autoencoder(
+        {**split_arch, "latent": {**split_arch["latent"], "inner": "kl"}}
+    ).latent
+    assert kl.down.out_channels == 8 and kl.up.in_channels == 4
+    assert torch.equal(kl.down.weight[4:], torch.zeros_like(kl.down.weight[4:]))
+
+
 def hf_folder_loads(folder) -> None:
     """LatentDragon and the remote code read one Hub folder and agree with the source model."""
     torch.manual_seed(0)
@@ -191,5 +250,6 @@ if __name__ == "__main__":
         legacy_safetensors_loads,
         legacy_lightning_loads,
         diffusers_folder_loads,
+        bottleneck_is_the_original_layout,
         hf_folder_loads,
     )
