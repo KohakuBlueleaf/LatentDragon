@@ -7,10 +7,12 @@ import torch
 from _tiny import ROOT, run_checks
 from kohakuengine import load_config_file
 from safetensors.torch import save_file
+from transformers import AutoModel
 
 from latentdragon.io.arch_json import flat_fields, upgrade_arch
 from latentdragon.io.diffusers_model import LatentDragonVAE
 from latentdragon.io.export import load_export, save_diffusers, save_export
+from latentdragon.io.hf import from_pretrained, save_pretrained
 from latentdragon.io.legacy import (
     read_lightning,
     read_safetensors,
@@ -36,6 +38,45 @@ FLAT_TINY = {
     },
 }
 OLD_PARTS = (("latent.", "bottleneck."), ("decoder.", "trunk."))
+
+# Everything the Hub remote code reimplements: LatentMaid, nested partitions, two levels
+HF_TINY = {
+    "encoder": {
+        "name": "latentmaid",
+        "out_channels": 8,
+        "stages": [[2, 16, 16, 1]],
+        "norm": "layer",
+    },
+    "latent": {
+        "name": "nested",
+        "dim": 8,
+        "unit": "partition",
+        "latent_chs": [1, 2],
+        "inner": {
+            "name": "vq",
+            "quantizer": {
+                "name": "kohaku",
+                "n_embed": 16,
+                "partitions": 2,
+                "rvq_levels": 2,
+                "partition_mode": "hyper",
+                "separated_proj": False,
+                "mlp_projector": True,
+                "mlp_hidden_dim": 16,
+                "base_dim": 4,
+                "trainable_base": True,
+                "dim_scale": True,
+            },
+        },
+    },
+    "decoder": {
+        "name": "latentmaid",
+        "in_channels": 8,
+        "stages": [[2, 32, 16, 1]],
+        "norm": "layer",
+    },
+    "head": {"name": "conv", "in_channels": 8, "fp32": True},
+}
 
 
 def tiny_model():
@@ -112,6 +153,35 @@ def diffusers_folder_loads(folder) -> None:
     assert torch.equal(loaded.encode(x).latent_dist.mean, expected)
 
 
+def hf_folder_loads(folder) -> None:
+    """LatentDragon and the remote code read one Hub folder and agree with the source model."""
+    torch.manual_seed(0)
+    model = build_autoencoder(upgrade_arch(HF_TINY)).double().eval()
+    save_pretrained(folder, HF_TINY, model.state_dict())
+    x = torch.randn(2, 3, 16, 16, dtype=torch.float64)
+
+    # LatentDragon rebuilds the same model
+    loaded = from_pretrained(folder).double().eval()
+    assert torch.equal(model({"x": x})[0]["x"], loaded({"x": x})[0]["x"])
+
+    # The remote code: same indices, and the same image from every partition count
+    remote = AutoModel.from_pretrained(folder, trust_remote_code=True)
+    remote = remote.double().eval()
+    with torch.no_grad():
+        encoded = model.encode({"x": x})
+        quantizer = model.latent.quantizer
+        local = encoded.latent["z"]["indices"] - quantizer.index_offsets
+        out = remote.encode(x)
+        assert torch.equal(out.indices, local), "indices differ"
+        for channels in model.latent.eval_variants():
+            latent = model.latent.variant(encoded.latent, channels)
+            expected = model.head(model.decode(latent))["x"]
+            parts = channels // quantizer.e_dim
+            got = remote.decode_indices(out.indices, parts).sample
+            error = ((got - expected).abs().max() / expected.abs().max()).item()
+            assert error < 1e-12, (parts, error)
+
+
 if __name__ == "__main__":
     run_checks(
         every_arch_file_builds,
@@ -121,4 +191,5 @@ if __name__ == "__main__":
         legacy_safetensors_loads,
         legacy_lightning_loads,
         diffusers_folder_loads,
+        hf_folder_loads,
     )

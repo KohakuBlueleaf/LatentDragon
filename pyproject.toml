@@ -27,7 +27,7 @@ dependencies = [
 kernels = ["triton>=3.7"]
 video = ["av"]
 wandb = ["wandb"]
-export = ["diffusers"]
+export = ["diffusers", "transformers", "huggingface_hub"]
 dev = ["ruff", "black"]
 
 [project.urls]

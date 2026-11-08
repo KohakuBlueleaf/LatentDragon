@@ -311,6 +311,17 @@ kogine run scripts/tools/convert_legacy.py --set SOURCE=old.ckpt --set TARGET=co
 `spec.json`), `diffusers` (a folder for `AutoModel.from_pretrained(trust_remote_code=True)`),
 `legacy_safetensors` or `legacy_ckpt`. A `.ckpt` carries pickled code; load files you trust.
 
+`FORM=hf` writes a Hugging Face folder (`CARD` adds a model card). It ships its own inference
+code, so `transformers` or `diffusers` `AutoModel.from_pretrained(repo, trust_remote_code=True)`
+loads it with only torch installed besides them, for LatentMaid image models with a vq or nested
+vq latent. LatentDragon loads any such folder, from disk or the Hub:
+
+```python
+from latentdragon.io.hf import from_pretrained
+
+model = from_pretrained("exports/LatentDragon-KVQ-v1")  # a folder or Hub repo id
+```
+
 ## Decode large latents
 
 `decode` runs a live or stored latent through a strategy selected by name, on a single-slot
