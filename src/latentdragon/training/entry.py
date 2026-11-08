@@ -238,7 +238,11 @@ def _start(rank: int, world: int, k: dict) -> tuple:
     if world > 1:
         backend = "nccl" if "cuda" in device else "gloo"
         timeout = timedelta(hours=k["DIST_TIMEOUT_HOURS"])
-        dist.init_process_group(backend, rank=rank, world_size=world, timeout=timeout)
+        # Bind NCCL to this rank's device; it otherwise guesses cuda:<rank>, wrong for DEVICES=[2, 3]
+        bound = torch.device(device) if backend == "nccl" else None
+        dist.init_process_group(
+            backend, rank=rank, world_size=world, timeout=timeout, device_id=bound
+        )
     torch.set_num_threads(k["CPU_THREADS"])
     torch.backends.cudnn.benchmark = k["CUDNN_BENCHMARK"]
     torch.manual_seed(k["SEED"])

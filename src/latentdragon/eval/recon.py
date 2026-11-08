@@ -10,6 +10,7 @@ from torchmetrics.image.fid import FrechetInceptionDistance
 
 from latentdragon.eval.usage import CodeTally, NoTally
 from latentdragon.model.core import tree
+from latentdragon.training.parallel.sync import barrier
 
 
 def new_fid(device) -> FrechetInceptionDistance:
@@ -21,10 +22,10 @@ def new_fid(device) -> FrechetInceptionDistance:
     distributed = dist.is_available() and dist.is_initialized()
     first = not distributed or dist.get_rank() == 0
     if not first:
-        dist.barrier()
+        barrier()
     metric = FrechetInceptionDistance(reset_real_features=False, normalize=True)
     if distributed and first:
-        dist.barrier()
+        barrier()
     return metric.to(device).eval().requires_grad_(False)
 
 

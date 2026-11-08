@@ -20,8 +20,17 @@ def rank() -> int:
 
 
 def barrier() -> None:
-    """Wait for every rank."""
-    if active():
+    """Wait for every rank.
+
+    An NCCL barrier names this rank's device, as Lightning's does: left out, NCCL guesses
+    cuda:<rank> and binds the communicator there, so `DEVICES=[2, 3]` then fails the first
+    gradient all-reduce with a tensor on the wrong device.
+    """
+    if not active():
+        return
+    if dist.get_backend() == "nccl":
+        dist.barrier(device_ids=[torch.cuda.current_device()])
+    else:
         dist.barrier()
 
 
