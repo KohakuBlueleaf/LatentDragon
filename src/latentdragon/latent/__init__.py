@@ -4,6 +4,7 @@
 from latentdragon.latent.context import LatentCtx
 
 # Teachers, terms and views with their registries; built-in terms register on import
+from latentdragon.latent.mae import MaskedImageTerm
 from latentdragon.latent.state_terms import StateRms
 from latentdragon.latent.teachers import TEACHER, Teacher
 from latentdragon.latent.terms import LATENT_TERM, WEIGHTING, LatentTerm
@@ -21,5 +22,6 @@ __all__ = [
     "LatentView",
     "Teacher",
     # built-in terms
+    "MaskedImageTerm",
     "StateRms",
 ]

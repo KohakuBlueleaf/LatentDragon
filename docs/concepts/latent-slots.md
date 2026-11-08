@@ -12,7 +12,10 @@ Two kinds of latent work touch training differently.
 A view declares `adversarial` (the critic sees it), `codebook_safe` (it stays on the
 codebook) and `domains`. Each view has its own recon pass, so views may change resolution. A
 term declares `requires`, `teacher` and `group`. Owned parameters train and checkpoint but
-never reach exports.
+never reach exports. A term that runs its own passes (the `mae` term's masked encoder walk)
+gets the uncompiled model once in `bind(model)`, before it moves to the device, and keeps the
+parts it calls as plain attributes so their parameters stay the model's; `post_step(step, sync)`
+runs once per optimizer step after the weight EMA, for term state shared across ranks.
 
 Terms and latent def losses share one path: live scalars in the composed backward, reaching
 the encoder without passing through `x_hat`. Seed logic is unchanged by them.
