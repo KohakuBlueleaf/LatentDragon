@@ -155,6 +155,7 @@ def loss_reads_masked_cells_only(folder) -> None:
     """Predictions and targets of visible cells never move the loss; the mask token trains."""
     torch.manual_seed(0)
     decoder = MaeDecoder(32, 16, dim=16, mlp=32, blocks=2).double()
+    random_head(decoder)
     model = encoder()
     x, keep = image_and_keep()
     features = model.masked_features(x, keep)
@@ -169,12 +170,42 @@ def loss_reads_masked_cells_only(folder) -> None:
     assert decoder.mask_token.grad.abs().amax() > 0, "mask token gets no gradient"
 
 
+def random_head(decoder: MaeDecoder) -> None:
+    """A non-zero prediction head, so gradients reach past it in one backward."""
+    with torch.no_grad():
+        decoder.pred.weight.normal_(0, 0.05)
+
+
+def head_starts_at_zero(folder) -> None:
+    """A new decoder predicts zero everywhere; the first backward reaches only its head."""
+    torch.manual_seed(0)
+    decoder = MaeDecoder(32, 16, dim=16, mlp=32, blocks=2).double()
+    model = encoder()
+    x, keep = image_and_keep()
+    pred = decoder(model.masked_features(x, keep), keep)
+    assert torch.equal(pred, torch.zeros_like(pred))
+
+    target = patch_targets(x, 16).double()
+    loss = masked_mse(pred, target, keep)
+    hidden = 1 - keep
+    expected = (target.square().mean(1, keepdim=True) * hidden).sum() / hidden.sum()
+    assert torch.allclose(loss, expected)
+    loss.backward()
+    assert decoder.pred.weight.grad.abs().amax() > 0
+    others = [p for n, p in decoder.named_parameters() if not n.startswith("pred.")]
+    for param in [*others, *model.parameters()]:
+        assert param.grad is None or torch.equal(
+            param.grad, torch.zeros_like(param.grad)
+        )
+
+
 def term_keeps_model_parameters(folder) -> None:
     """The bound term owns only its decoder; its loss reaches the encoder and the decoder."""
     torch.manual_seed(0)
     model = build_autoencoder(F16_ARCH)
     term = MaskedImageTerm(**TERM)
     term.bind(model)
+    random_head(term.decoder)
     assert all(
         key.startswith("decoder.") for key in term.state_dict()
     ), "owns a model part"
@@ -234,6 +265,7 @@ if __name__ == "__main__":
         mixer_kernel_size,
         mask_sampling,
         loss_reads_masked_cells_only,
+        head_starts_at_zero,
         term_keeps_model_parameters,
         term_trains_in_a_run,
     )

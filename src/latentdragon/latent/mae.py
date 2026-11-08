@@ -54,7 +54,8 @@ class MaeDecoder(nn.Module):
     """Mask token, isotropic LatentMaid blocks on the feature grid, one patch per cell.
 
     `patch` is the pixel size of one feature cell (the encoder's spatial scale); the output is
-    `(B, out_channels * patch**2, h, w)` in `pixel_unshuffle` order.
+    `(B, out_channels * patch**2, h, w)` in `pixel_unshuffle` order. The prediction head starts
+    at zero.
     """
 
     def __init__(
@@ -79,6 +80,10 @@ class MaeDecoder(nn.Module):
         self.pred = nn.Conv2d(dim, out_channels * patch**2, 1)
         mup_init(self.parameters())
         init_writers(self.blocks, writer_init)
+        # Zero head: the decoder starts at every cell's mean, and the encoder sees no MAE
+        # gradient until the head grows, so the term enters the shared backward gently
+        nn.init.zeros_(self.pred.weight)
+        nn.init.zeros_(self.pred.bias)
         self.mask_token = nn.Parameter(torch.zeros(1, dim, 1, 1))
 
     def forward(self, features: Tensor, keep: Tensor) -> Tensor:
