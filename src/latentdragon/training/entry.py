@@ -55,7 +55,7 @@ from latentdragon_common.knobs import (
     raise_problems,
     script_knobs,
     supplied_knobs,
-    unknown_problems,
+    unknown_notes,
 )
 from latentdragon_common.log import get_logger
 from latentdragon_common.registry import build
@@ -78,7 +78,9 @@ def free_port() -> int:
 
 def check(knobs: dict, script: str) -> None:
     """Report every config problem at once, before any device work."""
-    problems = unknown_problems(set(knobs), script_knobs(script))
+    for note in unknown_notes(set(knobs), script_knobs(script)):
+        log.warning("config", note=note)
+    problems = []
     try:
         with torch.device("meta"):
             model = build_autoencoder(knobs["ARCH"])

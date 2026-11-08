@@ -1,7 +1,8 @@
 # Configs
 
 The script owns every knob: UPPER_CASE globals in `scripts/train/ae.py`, whose defaults are
-a CPU smoke recipe. Unknown knobs are refused with a did-you-mean.
+a CPU smoke recipe. A config is Python, so it can define its own helper variables; an UPPER_CASE
+name the script does not read is logged as a warning with a did-you-mean, and the run goes on.
 
 Layers live in `configs/ae/`: `arch/`, `data/`, `precision/`, `train/`, and `recipes/`, which
 compose them with `use_config`. The folder names the group, so files are named for what they hold

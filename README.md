@@ -221,11 +221,13 @@ BATCH_SIZE = 16
 Every knob problem is reported together, before any GPU work:
 
 ```text
-3 config problem(s):
-  - unknown knob BATCH_SZE; did you mean BATCH_SIZE?
+2 config problem(s):
   - GAN_SCHEME r3gan needs CRITIC
   - set exactly one of MAX_STEPS and EPOCHS
 ```
+
+An UPPER_CASE name the script does not read, such as your own helper variable, is only a warning
+(`BATCH_SZE is not a knob, ignored; did you mean BATCH_SIZE?`).
 
 **What a run does.**
 

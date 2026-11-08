@@ -36,7 +36,8 @@ def all_problems_are_reported_together(folder) -> None:
         FREEZE=["decoder.nothing"],
         TRAIN_SOURCES=[],
     )
-    values["BATCH_SZE"] = 2
+    # A config's own helper variable is not a problem
+    values["LATENT_DIMS"] = 2
 
     try:
         check(values, str(SCRIPT))
@@ -45,8 +46,8 @@ def all_problems_are_reported_together(folder) -> None:
     else:
         raise AssertionError("bad knobs were accepted")
 
+    assert "LATENT_DIMS" not in text, text
     expected = (
-        "did you mean BATCH_SIZE",
         "nope",
         "MAX_STEPS",
         "not divisible",

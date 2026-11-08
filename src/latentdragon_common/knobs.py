@@ -24,14 +24,17 @@ def supplied_knobs(values: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in values.items() if k.isupper() and not k.startswith("_")}
 
 
-def unknown_problems(supplied: set[str], known: set[str]) -> list[str]:
-    """One message per unknown knob, with a did-you-mean hint."""
-    problems = []
+def unknown_notes(supplied: set[str], known: set[str]) -> list[str]:
+    """One note per UPPER_CASE name the script does not read, with a did-you-mean hint.
+
+    A config is Python, so its own helper variables are legal; these are warnings, not problems.
+    """
+    notes = []
     for name in sorted(supplied - known):
         close = difflib.get_close_matches(name, known, n=1)
         hint = f"; did you mean {close[0]}?" if close else ""
-        problems.append(f"unknown knob {name}{hint}")
-    return problems
+        notes.append(f"{name} is not a knob, ignored{hint}")
+    return notes
 
 
 def raise_problems(problems: list[str]) -> None:
