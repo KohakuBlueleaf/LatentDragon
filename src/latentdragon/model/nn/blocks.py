@@ -36,6 +36,10 @@ class Block(nn.Module):
     def writer(self) -> nn.Module | None:
         return None
 
+    def masked(self, x: Tensor, keep: Tensor) -> Tensor:
+        """`forward` on the cells where `keep` is 1, masked cells exactly zero in and out."""
+        raise NotImplementedError(f"{type(self).__name__} has no masked forward")
+
 
 WRITER_INITS = ("hidden", "output")
 
@@ -76,14 +80,12 @@ def _channel_mlp(
 
 @BLOCK.register("mlp")
 class BasicBlock(Block):
-    """Norm, depthwise 3x3, channel MLP, residual.
+    """Norm, depthwise `kernel_size` mixer (3x3 by default), channel MLP, residual.
 
     `unit_rows` gives every layer in the block unit-norm rows: the depthwise filters and the
     MLP input projection carry no scale of their own, the writer carries a per-channel gain,
     and the norm drops its affine. Biases stay.
     """
-
-    spatial_reach = 1
 
     def __init__(
         self,
@@ -92,13 +94,19 @@ class BasicBlock(Block):
         out_dim: int,
         norm_layer: Callable = RMSNorm,
         unit_rows: bool = False,
+        kernel_size: int = 3,
     ):
         super().__init__()
+        if kernel_size % 2 == 0:
+            raise ValueError(f"mixer kernel_size must be odd, got {kernel_size}")
+        self.spatial_reach = kernel_size // 2
         self.norm = (
             norm_layer(in_dim, affine=False) if unit_rows else norm_layer(in_dim)
         )
         mixer = UnitRowConv2d if unit_rows else nn.Conv2d
-        self.mixer = mixer(in_dim, in_dim, 3, 1, 1, groups=in_dim)
+        self.mixer = mixer(
+            in_dim, in_dim, kernel_size, 1, kernel_size // 2, groups=in_dim
+        )
         self.swiglu = _channel_mlp(in_dim, mlp_dim, out_dim, unit_rows)
 
     @property
@@ -112,6 +120,17 @@ class BasicBlock(Block):
         mixed = self.mixer(self.norm(x)).transpose(1, -1)
         return x + self.swiglu(mixed).transpose(1, -1)
 
+    @compile_wrapper(scope="module")
+    def masked(self, x: Tensor, keep: Tensor) -> Tensor:
+        """`forward` as a sparse conv over the kept cells; only the mixer crosses cells.
+
+        The input mask clears a stage projection's bias, the second keeps the norm's shift out
+        of the mixer, the last clears the MLP biases. The norm must be per position.
+        """
+        x = x * keep
+        mixed = self.mixer(self.norm(x) * keep).transpose(1, -1)
+        return x + self.swiglu(mixed).transpose(1, -1) * keep
+
 
 @BLOCK.register("mlp_plain")
 class PlainBlock(BasicBlock):
@@ -122,6 +141,12 @@ class PlainBlock(BasicBlock):
         """Spatial mix, then channel MLP on channels-last; nothing is added back."""
         mixed = self.mixer(self.norm(x)).transpose(1, -1)
         return self.swiglu(mixed).transpose(1, -1)
+
+    @compile_wrapper(scope="module")
+    def masked(self, x: Tensor, keep: Tensor) -> Tensor:
+        """`forward` as a sparse conv over the kept cells, without the residual add."""
+        mixed = self.mixer(self.norm(x * keep) * keep).transpose(1, -1)
+        return self.swiglu(mixed).transpose(1, -1) * keep
 
 
 @BLOCK.register("res")

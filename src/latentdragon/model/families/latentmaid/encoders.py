@@ -22,6 +22,8 @@ from latentdragon.model.nn.stages import (
     attn_slots,
     block_stack,
     call_block,
+    keep_at,
+    masked_step,
     product,
 )
 from latentdragon.model.nn.streaming import FrameCache
@@ -106,6 +108,37 @@ class ShuffleEncoder(TensorPart):
     def tensor(self, x: Tensor) -> Tensor:
         """Signal to the encoder output."""
         return self.out_proj(self.features(x))
+
+    def masked_features(self, x: Tensor, keep: Tensor) -> Tensor:
+        """`features` of an image as a sparse-conv walk over the kept cells, FCMAE style.
+
+        `keep` is `(B, 1, h, w)` on the feature grid, 1 for a visible cell. Every stage sees whole
+        cells, so only the blocks' mixers cross cells, and they read zeros for masked ones: a
+        masked pixel never reaches a visible feature, and masked features are exactly zero.
+        """
+        refusal = mask_refusal(self)
+        if refusal:
+            raise ValueError(f"masked encoding: {refusal}")
+        if x.dim() != 4:
+            raise ValueError(f"masked encoding takes images, got {x.dim()}D input")
+        hidden = self.features(x * keep_at(keep, x), partial(masked_step, keep=keep))
+        return hidden * keep_at(keep, hidden)
+
+    def masked_tensor(self, x: Tensor, keep: Tensor) -> Tensor:
+        """`tensor` of a masked image: the encoder output the latent def would read, masked
+        cells exactly zero."""
+        out = self.out_proj(self.masked_features(x, keep))
+        return out * keep_at(keep, out)
+
+
+def mask_refusal(encoder: ShuffleEncoder) -> str | None:
+    """Why `encoder` cannot encode masked images exactly, or None."""
+    if any(not isinstance(attn, nn.Identity) for attn in encoder.attn_blocks):
+        return "attention mixes masked cells into visible ones"
+    for module in encoder.modules():
+        if isinstance(module, (nn.GroupNorm, nn.modules.batchnorm._BatchNorm)):
+            return f"{type(module).__name__} statistics span masked cells"
+    return None
 
 
 @ENCODER.register("latentmaid")

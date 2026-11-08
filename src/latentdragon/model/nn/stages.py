@@ -38,6 +38,19 @@ def call_block(block: nn.Module, x: Tensor, **frames) -> Tensor:
     return block(x, **frames)
 
 
+def keep_at(keep: Tensor, x: Tensor) -> Tensor:
+    """The cell mask `keep` repeated up to `x`'s spatial size, which it must divide, in `x`'s
+    dtype so a 16-bit walk stays 16-bit."""
+    rows = x.shape[-2] // keep.shape[-2]
+    cols = x.shape[-1] // keep.shape[-1]
+    return keep.to(x.dtype).repeat_interleave(rows, -2).repeat_interleave(cols, -1)
+
+
+def masked_step(block: nn.Module, x: Tensor, keep: Tensor) -> Tensor:
+    """Per-block step of a masked stage walk: the block's `masked` at `x`'s resolution."""
+    return block.masked(x, keep_at(keep, x))
+
+
 def block_stack(
     block: Any, count: int, dim: int, mlp_dim: int, norm_layer: Callable
 ) -> nn.ModuleList:
